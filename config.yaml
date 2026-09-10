@@ -1,0 +1,30 @@
+# ---------------------------------------------------------------------------
+# What to monitor. Defaults are tuned for an extensive sweep of Edinburgh.
+# ---------------------------------------------------------------------------
+
+rightmove:
+  # Rightmove location identifier. REGION^475 == Edinburgh (the city).
+  # Resolve other places with:  python -m rightmove_monitor.cli resolve "Leith"
+  location_identifier: "REGION^475"
+  location_name: "Edinburgh"
+
+  channel: "BUY"            # BUY (for sale) or RENT (to let)
+  include_sstc: false       # include Sold STC / Under Offer listings in the sweep
+
+  # Rightmove only paginates ~1000 results per query. The scraper splits the
+  # search into price bands recursively so a single snapshot still captures
+  # the whole market. Lower this if you see "band ... exceeds cap" warnings.
+  max_results_per_query: 1000
+
+  request_delay_seconds: 1.5   # polite pause between every request
+  max_retries: 4
+
+ukhpi:
+  # UK House Price Index region slug. This series blends Registers of Scotland
+  # data, so it is the correct sold-price benchmark for Edinburgh (HM Land
+  # Registry "Price Paid" transactions cover England & Wales only).
+  region_slug: "city-of-edinburgh"
+  start_month: "2004-01"       # earliest month with Scottish data
+
+paths:
+  data_dir: "data"

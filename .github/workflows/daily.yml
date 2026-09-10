@@ -1,0 +1,65 @@
+name: Daily Edinburgh housing snapshot
+
+on:
+  schedule:
+    # 06:20 UTC daily (~07:20 UK summer, 06:20 UK winter). GitHub may delay
+    # scheduled runs by up to ~an hour under load.
+    - cron: "20 6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write   # commit the day's data back to the repo
+  pages: write      # publish the dashboard to GitHub Pages
+  id-token: write   # required by actions/deploy-pages
+
+concurrency:
+  group: daily-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scrape, refresh UK HPI, analyse, forecast, build dashboard
+        run: python -m rightmove_monitor.cli all
+
+      - name: Commit the day's data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "Daily snapshot $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      - name: Stage the Pages site
+        run: |
+          mkdir -p _site
+          cp data/processed/dashboard.html _site/index.html
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: snapshot
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

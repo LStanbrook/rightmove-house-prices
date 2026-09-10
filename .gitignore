@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+
+# Runtime logs
+data/logs/
+
+# Regenerated every run from the tracked data below — no need to version them
+data/processed/dashboard.html
+data/processed/dashboard.fragment.html
+data/processed/forecast_ukhpi.png
+
+# NOTE: the raw per-day Rightmove snapshots ARE tracked. The analysis rebuilds
+# the whole time series from them, so the cloud runner needs the full history
+# in the repo. ~200 KB/day.

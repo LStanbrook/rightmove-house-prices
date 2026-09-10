@@ -1,0 +1,10 @@
+{
+  "captured_at": "2026-09-08T17:10:35.145494+00:00",
+  "snapshot_date": "2026-09-08",
+  "location_identifier": "REGION^475",
+  "location_name": "Edinburgh",
+  "reported_total": 1867,
+  "collected": 1867,
+  "warnings": [],
+  "file": "C:\\Users\\louis\\OneDrive\\Documents\\OneDrive\\Data Science Projects\\DS Projects\\rightmove house prices\\data\\raw\\rightmove\\edinburgh_2026-09-08.parquet"
+}

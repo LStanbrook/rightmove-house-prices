@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.parquet binary
+*.png binary
+*.ipynb -text
+scripts/*.cmd text eol=crlf
+scripts/*.ps1 text eol=crlf
