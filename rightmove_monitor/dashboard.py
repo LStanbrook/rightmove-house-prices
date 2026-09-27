@@ -92,6 +92,7 @@ def build_payload(cfg: Config) -> dict:
                 continue
             reduced = raw.loc[raw["outcode"] == oc, "added_or_reduced_kind"]
             dom_oc = dom[raw["outcode"] == oc]
+            latlon = raw.loc[raw["outcode"] == oc, ["latitude", "longitude"]].dropna()
             by_area.append({
                 "seg": oc,
                 "name": area_short(oc),
@@ -102,6 +103,8 @@ def build_payload(cfg: Config) -> dict:
                 "vs_city": float(sub.median() / city_median - 1),
                 "pct_reduced": float(100 * (reduced == "Reduced").mean()),
                 "median_dom": float(dom_oc.median()) if dom_oc.notna().any() else None,
+                "lat": float(latlon["latitude"].median()) if not latlon.empty else None,
+                "lon": float(latlon["longitude"].median()) if not latlon.empty else None,
             })
         by_area.sort(key=lambda r: r["median"])
         payload["by_outcode"] = [
@@ -313,6 +316,8 @@ _TEMPLATE = r"""
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
   :root{
     --page:#f4f5f7; --surface:#ffffff; --surface-2:#fafbfc;
@@ -396,37 +401,81 @@ _TEMPLATE = r"""
   .lt .oc{color:var(--muted);font-family:var(--mono);font-size:11px}
   .scroller{overflow-x:auto}
 
-  .spark-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:1px;
-    background:var(--hair);border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
-  .spark-cell{background:var(--surface);padding:11px 13px 9px;position:relative}
-  .spark-name{font-size:11px;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .spark-name .oc{color:var(--muted);font-family:var(--mono);font-size:10px;margin-left:3px}
-  .spark-row{display:flex;align-items:baseline;justify-content:space-between;gap:6px;margin-top:2px}
-  .spark-price{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em}
-  .spark-delta{font-family:var(--mono);font-size:11px;flex-shrink:0}
-  .spark-svg{display:block;margin-top:7px}
+  /* small inline SVG sparkline, reused both in map popups and nowhere else now */
+  .spark-svg{display:block}
   .spark-svg .fill{opacity:.14}
   .spark-svg .dot{opacity:1}
 
-  .loft-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:1px;
-    background:var(--hair);border:1px solid var(--hair);border-radius:var(--radius);overflow:hidden}
-  .loft-card{background:var(--surface);padding:14px 15px 12px;display:flex;flex-direction:column;gap:7px}
-  .loft-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
-  .loft-price{font-family:var(--mono);font-size:17px;font-weight:600;letter-spacing:-.01em}
-  .loft-qual{font-size:10.5px;color:var(--muted);margin-top:1px}
-  .loft-score{flex-shrink:0;font-family:var(--mono);font-size:10.5px;font-weight:600;
-    padding:2px 8px;border-radius:99px;white-space:nowrap}
+  #area-map{height:520px;border-radius:var(--radius) var(--radius) 0 0;
+    background:var(--surface-2);z-index:0}
+  .map-legend{display:flex;flex-wrap:wrap;align-items:center;gap:18px;
+    border:1px solid var(--hair);border-top:0;border-radius:0 0 var(--radius) var(--radius);
+    background:var(--surface);padding:10px 16px;font-size:11px;color:var(--ink-2)}
+  .map-legend .lg-group{display:flex;align-items:center;gap:6px}
+  .map-legend .lg-label{color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:10px}
+  .map-legend .lg-swatch{width:16px;height:10px;border-radius:2px;display:inline-block}
+  .map-legend .lg-ring{width:10px;height:10px;border-radius:50%;display:inline-block;
+    border:2px solid; background:var(--surface-2)}
+  /* Leaflet chrome, themed to match the page rather than its own default palette */
+  .leaflet-container{background:var(--surface-2);font-family:var(--sans)}
+  .leaflet-control-zoom a{background:var(--surface)!important;color:var(--ink)!important;
+    border-color:var(--hair)!important}
+  .leaflet-control-attribution{background:color-mix(in srgb, var(--surface) 85%, transparent)!important;
+    color:var(--muted)!important;font-size:10px!important}
+  .leaflet-control-attribution a{color:var(--ink-2)!important}
+  .map-label{background:var(--surface);border:1px solid var(--hair)!important;color:var(--ink);
+    font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 6px!important;
+    border-radius:99px;box-shadow:none!important;white-space:nowrap}
+  .map-label::before{display:none}
+  .leaflet-popup-content-wrapper{background:var(--surface);color:var(--ink);
+    border-radius:var(--radius);box-shadow:0 4px 18px rgba(0,0,0,.18)}
+  .leaflet-popup-tip{background:var(--surface)}
+  .leaflet-popup-close-button{color:var(--muted)!important}
+  .map-pop{min-width:190px}
+  .map-pop .mp-name{font-size:13px;font-weight:600;margin-bottom:1px}
+  .map-pop .mp-oc{color:var(--muted);font-family:var(--mono);font-weight:400;font-size:11px}
+  .map-pop .mp-price{font-family:var(--mono);font-size:16px;font-weight:600;margin-top:4px}
+  .map-pop .mp-row{font-size:11.5px;color:var(--ink-2);margin-top:2px}
+  .map-pop .mp-spark{margin-top:8px}
+
+  .loft-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;
+    flex-wrap:wrap;margin-bottom:12px}
+  .loft-count{font-size:12px;color:var(--ink-2)}
+  .loft-count b{color:var(--ink);font-family:var(--mono)}
+  .btn{font:600 12px var(--sans);color:#fff;background:var(--accent);border:none;
+    border-radius:7px;padding:7px 13px;cursor:pointer;white-space:nowrap}
+  .btn:hover{filter:brightness(1.08)}
+  .btn:active{filter:brightness(.94)}
+  .btn-note{font-size:10.5px;color:var(--muted);margin-top:6px}
+
+  .loft-list{display:flex;flex-direction:column;border:1px solid var(--hair);border-radius:var(--radius);
+    overflow:hidden}
+  .loft-row{display:flex;align-items:center;gap:14px;padding:11px 15px;background:var(--surface);
+    border-bottom:1px solid var(--hair)}
+  .loft-row:last-child{border-bottom:0}
+  .loft-row:nth-child(even){background:var(--surface-2)}
+  .loft-score{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;font-weight:600;
+    padding:3px 9px;border-radius:99px;white-space:nowrap}
   .loft-score.strong{background:var(--accent-soft);color:var(--accent)}
   .loft-score.maybe{background:var(--surface-2);color:var(--ink-2);border:1px solid var(--hair)}
-  .loft-meta{font-size:12px;color:var(--ink-2)}
-  .loft-addr{font-size:12.5px;color:var(--ink);line-height:1.35}
-  .loft-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:1px}
-  .loft-chip{font-size:10.5px;padding:2px 8px;border-radius:99px;background:var(--surface-2);
+  .loft-price{flex:0 0 92px;font-family:var(--mono);font-size:14px;font-weight:600;letter-spacing:-.01em}
+  .loft-qual{flex:0 0 108px;font-size:10.5px;color:var(--muted);line-height:1.3}
+  .loft-main{flex:1 1 auto;min-width:0}
+  .loft-addr{font-size:12.5px;color:var(--ink);line-height:1.3;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis}
+  .loft-meta{font-size:11px;color:var(--ink-2);margin-top:1px}
+  .loft-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+  .loft-chip{font-size:10px;padding:1px 7px;border-radius:99px;background:var(--surface-2);
     border:1px solid var(--hair);color:var(--ink-2)}
-  .loft-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto;
-    padding-top:7px;font-size:11px;color:var(--muted)}
-  .loft-foot a{font-weight:600;text-decoration:none}
+  .loft-foot{flex:0 0 128px;text-align:right;font-size:10.5px;color:var(--muted);line-height:1.35}
+  .loft-foot a{display:inline-block;margin-top:3px;font-weight:600;text-decoration:none}
   .loft-foot a:hover{text-decoration:underline}
+  @media (max-width:760px){
+    .loft-row{flex-wrap:wrap}
+    .loft-qual{display:none}
+    .loft-foot{flex-basis:100%;text-align:left;margin-top:4px}
+  }
+
   .loft-tip{font-size:12.5px;color:var(--ink-2);background:var(--surface-2);border:1px solid var(--hair);
     border-radius:8px;padding:11px 13px;margin-top:14px;line-height:1.55}
 
@@ -456,14 +505,19 @@ _TEMPLATE = r"""
 
   <h2>Cheaper vs dearer — Edinburgh by area</h2>
   <div class="card">
-    <p class="ct">Median asking price by area</p>
-    <p class="cs">Postcode districts, cheapest to dearest. Dashed line = city median. Numbers after each bar are listing counts.</p>
-    <div class="chartbox h-tall"><canvas id="c-area-rank"></canvas></div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <p class="ct">How every area is trending</p>
-    <p class="cs" id="area-trend-cs">Median asking price per snapshot, every district — cheapest to dearest, left to right, top to bottom. Each sparkline is scaled to its own range; read the price and the change, not the slope, across cards.</p>
-    <div id="area-sparks" class="spark-grid"></div>
+    <p class="ct">Price level &amp; trend, by area</p>
+    <p class="cs">One map: marker fill = median asking price (light = cheap, dark = dear); marker ring =
+      how that area has moved since the first snapshot (green = up, red = down, grey = flat). Click a marker for the
+      full trend. Every district labelled directly, so you don't need the legend to read a value.</p>
+    <div id="area-map"></div>
+    <div class="map-legend">
+      <div class="lg-group"><span class="lg-label">Price</span><span id="lg-price"></span></div>
+      <div class="lg-group"><span class="lg-label">Trend</span>
+        <span class="lg-ring" id="lg-ring-up" style="border-color:var(--up)"></span> up
+        <span class="lg-ring" id="lg-ring-down" style="border-color:var(--down)"></span> down
+        <span class="lg-ring" id="lg-ring-flat" style="border-color:var(--muted)"></span> flat
+      </div>
+    </div>
   </div>
   <div class="card" style="margin-top:16px">
     <p class="ct">Area league table</p>
@@ -476,8 +530,14 @@ _TEMPLATE = r"""
     <p class="ct">Today's closest matches</p>
     <p class="cs" id="loft-cs">Every current listing's description and key features, scanned for warehouse/loft/mill-conversion
       language (warehouse, foundry, printworks, bonded warehouse…) and supporting decor cues (exposed brick, mezzanine,
-      double-height, open plan…). Sorted by how strong the match is, cheapest first within a tier.</p>
-    <div id="loft-grid" class="loft-grid"></div>
+      double-height, exposed concrete/ductwork, open plan…). Sorted by how strong the match is, cheapest first within a tier.</p>
+    <div class="loft-actions">
+      <span class="loft-count"><b id="loft-n">0</b> matches today</span>
+      <button class="btn" id="loft-open-all" type="button">Open all in new tabs ↗</button>
+    </div>
+    <div id="loft-grid" class="loft-list"></div>
+    <p class="btn-note">Some browsers block more than one tab opening at once — if that happens, allow pop-ups for
+      this page and click again.</p>
     <p class="loft-tip">Edinburgh's own industrial-conversion stock clusters in a handful of places worth watching
       directly, scan or not: <b>Leith</b> (EH6) — converted whisky bonds and warehouses around the Shore and
       Bonnington; <b>Tanfield / Canonmills</b> (EH3) — the former print works, a well-known loft development;
@@ -740,51 +800,9 @@ function renderQual(p){
     options:o }));
 }
 
-function renderAreaRank(p){
-  const el = $("#c-area-rank"); const rows = DATA.by_area || [];
-  if(!el || el.tagName!=="CANVAS"){ return; }
-  if(rows.length===0){ box(el,"No area data in the latest snapshot."); return; }
-  const cityMed = DATA.city_median;
-  const o = baseOpts(p);
-  o.indexAxis = "y";
-  o.layout.padding.right = 34;
-  o.plugins.tooltip.callbacks = {
-    title: it => `${rows[it[0].dataIndex].seg} · ${rows[it[0].dataIndex].name}`,
-    label: it => {
-      const r = rows[it.dataIndex];
-      const vs = (r.vs_city>=0?"+":"") + (100*r.vs_city).toFixed(0) + "% vs city";
-      return [`${gbp0(r.median)}  (${vs})`, `${r.n} listings · ${r.pct_reduced.toFixed(0)}% reduced`];
-    },
-  };
-  o.scales.x.ticks.callback = v => gbpK(v);
-  o.scales.y.ticks.font = { family:"IBM Plex Mono", size:11 };
-  o.scales.y.afterFit = sc => { sc.width = Math.max(sc.width, 46); };
-  const cnt = { id:"arcnt", afterDatasetsDraw(ch){
-    const {ctx} = ch; ctx.save();
-    ctx.font = "10px 'IBM Plex Mono'"; ctx.fillStyle = p.muted; ctx.textBaseline = "middle"; ctx.textAlign = "left";
-    ch.getDatasetMeta(0).data.forEach((b,i)=>ctx.fillText(rows[i].n, b.x + 6, b.y));
-    ctx.restore();
-  }};
-  const refline = { id:"arref", afterDatasetsDraw(ch){
-    if(cityMed==null) return;
-    const x = ch.scales.x.getPixelForValue(cityMed);
-    const {top,bottom} = ch.chartArea; const {ctx} = ch;
-    ctx.save();
-    ctx.strokeStyle = p.ink2; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
-    ctx.setLineDash([]); ctx.fillStyle = p.ink2; ctx.font = "9px 'IBM Plex Mono'"; ctx.textAlign = "center";
-    ctx.fillText("city median", x, top - 3);
-    ctx.restore();
-  }};
-  const colors = rows.map(r => r.vs_city < 0 ? p.aqua : p.accent);
-  CHARTS.push(new Chart(el, { type:"bar", data:{ labels:rows.map(r=>r.seg),
-    datasets:[{ data:rows.map(r=>r.median), backgroundColor:colors, borderRadius:3, maxBarThickness:20 }] },
-    options:o, plugins:[cnt, refline] }));
-}
-
 // A sparkline is scaled to ITS OWN min/max (standard small-multiples practice) -
-// price LEVELS aren't comparable across cards, only the shape and the labelled
-// price/delta are. That's what lets 17 areas share one chart with no legend.
+// price LEVELS aren't comparable across sparklines, only the shape and the
+// labelled price/delta are. Reused inside each area's map popup.
 function buildSpark(points, w, h){
   const idx = points.map((v,i)=>({i,v})).filter(d => d.v != null);
   if(idx.length === 0) return null;
@@ -802,38 +820,98 @@ function buildSpark(points, w, h){
   return { path:d.trim(), area, lastX:x(last.i), lastY:y(last.v), firstV:first.v, lastV:last.v };
 }
 
-function renderAreaSparklines(p){
-  const host = $("#area-sparks"); if(!host) return;
-  const ranked = DATA.by_area || [];
-  const at = DATA.area_trend;
-  if(ranked.length === 0){
-    host.innerHTML = '<div class="empty" style="padding:28px 0">No area data in the latest snapshot.</div>';
+function sparkSvg(points, color){
+  const sp = buildSpark(points, 150, 38);
+  if(!sp) return '<div class="empty" style="height:38px;font-size:10px">no history yet</div>';
+  return `<svg class="spark-svg" width="150" height="38" viewBox="0 0 150 38" preserveAspectRatio="none">
+    <path class="fill" d="${sp.area}" fill="${color}" stroke="none"></path>
+    <path d="${sp.path}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"></path>
+    <circle class="dot" cx="${sp.lastX.toFixed(1)}" cy="${sp.lastY.toFixed(1)}" r="2.8" fill="${color}"></circle>
+  </svg>`;
+}
+
+function isDarkTheme(){
+  const t = document.documentElement.getAttribute("data-theme");
+  if(t === "dark") return true;
+  if(t === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+
+let AREA_MAP = null;
+function renderAreaMap(p){
+  const host = document.getElementById("area-map");
+  if(!host || typeof L === "undefined") return;
+  const rows = (DATA.by_area || []).filter(r => r.lat != null && r.lon != null);
+  if(AREA_MAP){ AREA_MAP.remove(); AREA_MAP = null; }
+  if(rows.length === 0){
+    host.innerHTML = '<div class="empty" style="height:100%">No area data in the latest snapshot.</div>';
     return;
   }
-  const bySeg = {}; (at ? at.series : []).forEach(s => bySeg[s.seg] = s);
-  host.innerHTML = ranked.map(r => {
-    const s = bySeg[r.seg];
-    const sp = s ? buildSpark(s.points, 140, 34) : null;
-    let color = p.ink2, deltaHtml = '<span style="color:var(--muted)">—</span>';
-    if(sp && sp.firstV != null){
-      const chg = 100 * (sp.lastV / sp.firstV - 1);
-      color = chg > 0.05 ? p.up : (chg < -0.05 ? p.down : p.ink2);
-      deltaHtml = Math.abs(chg) >= 0.05
-        ? `<span style="color:${color}">${pct1(chg)}</span>`
-        : '<span style="color:var(--muted)">flat</span>';
-    }
-    const svg = sp ? `
-      <svg class="spark-svg" width="140" height="34" viewBox="0 0 140 34" preserveAspectRatio="none">
-        <path class="fill" d="${sp.area}" fill="${color}" stroke="none"></path>
-        <path d="${sp.path}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"></path>
-        <circle class="dot" cx="${sp.lastX.toFixed(1)}" cy="${sp.lastY.toFixed(1)}" r="2.6" fill="${color}"></circle>
-      </svg>` : `<div class="empty" style="height:34px;font-size:10px;margin-top:7px">no history yet</div>`;
-    return `<div class="spark-cell" title="${r.name} (${r.seg}) — ${r.n} listings today">
-      <div class="spark-name">${r.name} <span class="oc">${r.seg}</span></div>
-      <div class="spark-row"><span class="spark-price">${gbp0(r.median)}</span><span class="spark-delta">${deltaHtml}</span></div>
-      ${svg}
-    </div>`;
-  }).join("");
+
+  // Sequential single-hue scale (light -> dark blue) over the real price range -
+  // magnitude, so one hue, never a rainbow. Built from the data's own quantiles.
+  const prices = rows.map(r => r.median).sort((a,b) => a-b);
+  const qAt = f => prices[Math.min(prices.length-1, Math.round(f*(prices.length-1)))];
+  const steps = [qAt(0), qAt(.2), qAt(.4), qAt(.6), qAt(.8), qAt(1)];
+  // Light mode: cheap=light blue -> dear=dark blue (dark pops on a light surface).
+  // Dark mode: the same family, reversed - a dark step recedes into a near-black
+  // basemap the way a light step recedes into a white one, so cheap=dark blue,
+  // dear=light blue keeps "further from the surface = higher value" true in both.
+  const rampLight = ["#cde2fb","#9ec5f4","#6da7ec","#3987e5","#1c5cab","#0d366b"];
+  const dark = isDarkTheme();
+  const ramp = dark ? rampLight.slice().reverse() : rampLight;
+  function priceColor(v){
+    for(let i=steps.length-1;i>=0;i--) if(v >= steps[i]) return ramp[Math.min(i, ramp.length-1)];
+    return ramp[0];
+  }
+
+  const bySeg = {}; (DATA.area_trend ? DATA.area_trend.series : []).forEach(s => bySeg[s.seg] = s);
+  const moverBySeg = {}; (DATA.area_movers || []).forEach(m => moverBySeg[m.seg] = m);
+
+  AREA_MAP = L.map(host, { scrollWheelZoom:false, attributionControl:true })
+    .setView([55.9518, -3.2100], 12);
+  AREA_MAP.on("click", () => AREA_MAP.scrollWheelZoom.enable());
+  // Esri's Canvas basemaps: free, no API key, and conveniently come as a
+  // matched light/dark pair (unlike most keyless tile hosts, which are light-only).
+  const canvas = dark ? "World_Dark_Gray_Base" : "World_Light_Gray_Base";
+  L.tileLayer(`https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/${canvas}/MapServer/tile/{z}/{y}/{x}`, {
+    maxZoom: 16,
+    attribution: "Esri, HERE, Garmin, &copy; OpenStreetMap contributors, GIS community",
+  }).addTo(AREA_MAP);
+
+  rows.forEach(r => {
+    const mover = moverBySeg[r.seg];
+    const trendColor = !mover ? p.muted
+      : mover.pct > 0.5 ? p.up : (mover.pct < -0.5 ? p.down : p.muted);
+    const radius = 9 + 7 * Math.sqrt(r.n / Math.max(...rows.map(x=>x.n)));
+    const marker = L.circleMarker([r.lat, r.lon], {
+      radius, weight:3, color:trendColor, fillColor:priceColor(r.median),
+      fillOpacity:.88, opacity:.9,
+    }).addTo(AREA_MAP);
+    marker.bindTooltip(`${r.seg} ${gbpK(r.median)}`, {
+      permanent:true, direction:"top", className:"map-label", offset:[0,-radius+2],
+    });
+    const series = bySeg[r.seg];
+    const spark = series ? sparkSvg(series.points, trendColor) : "";
+    const moverLine = mover
+      ? `<div class="mp-row">${mover.from} → ${mover.to}: ${pct1(mover.pct)}</div>` : "";
+    marker.bindPopup(`<div class="map-pop">
+      <div class="mp-name">${r.name} <span class="mp-oc">${r.seg}</span></div>
+      <div class="mp-price">${gbp0(r.median)}</div>
+      <div class="mp-row">${(r.vs_city>=0?"+":"")+(100*r.vs_city).toFixed(0)}% vs city median</div>
+      <div class="mp-row">${r.n} listings · ${r.pct_reduced.toFixed(0)}% reduced</div>
+      ${moverLine}
+      <div class="mp-spark">${spark}</div>
+    </div>`);
+  });
+
+  // Legend gradient, built from the same steps/ramp the map just used.
+  const lg = document.getElementById("lg-price");
+  if(lg){
+    lg.innerHTML = steps.slice(0,-1).map((s,i) =>
+      `<span class="lg-swatch" style="background:${ramp[i]}"></span>`
+    ).join("") + ` <span style="font-family:var(--mono)">${gbpK(steps[0])} → ${gbpK(steps[steps.length-1])}</span>`;
+  }
 }
 
 function renderAreaTable(){
@@ -873,19 +951,26 @@ function esc(s){
 function renderLoftGrid(){
   const host = $("#loft-grid"); if(!host) return;
   const rows = DATA.loft_candidates || [];
+  const btn = $("#loft-open-all");
+  const nEl = $("#loft-n");
+  if(nEl) nEl.textContent = rows.length;
+
   if(!DATA.loft_text_available){
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
       "Today's snapshot predates the free-text scan being added — tomorrow's run will pick up descriptions " +
-      "and key features, and this grid will fill in.</div>";
+      "and key features, and this list will fill in.</div>";
     $("#loft-cs").style.display = "none";
+    if(btn) btn.style.display = "none";
     return;
   }
   if(rows.length === 0){
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
       "No strong industrial-loft matches in today's snapshot. That's normal — this stock turns over slowly. " +
       "Check back after the next daily run.</div>";
+    if(btn) btn.style.display = "none";
     return;
   }
+
   host.innerHTML = rows.map(r => {
     const tier = r.score >= 6 ? "strong" : "maybe";
     const beds = r.bedrooms == null ? "" : `${r.bedrooms} bed`;
@@ -893,23 +978,29 @@ function renderLoftGrid(){
     const meta = [beds, r.property_sub_type, size].filter(Boolean).join(" · ");
     const chips = r.matches.map(m => `<span class="loft-chip">${esc(m)}</span>`).join("");
     const added = r.added_or_reduced ? esc(r.added_or_reduced) : "";
-    return `<div class="loft-card">
-      <div class="loft-top">
-        <div>
-          <div class="loft-price">${gbp0(r.price)}</div>
-          <div class="loft-qual">${esc(r.price_qualifier || "")}</div>
-        </div>
-        <span class="loft-score ${tier}">score ${r.score}</span>
+    return `<div class="loft-row">
+      <span class="loft-score ${tier}">${r.score}</span>
+      <span class="loft-price">${gbp0(r.price)}</span>
+      <span class="loft-qual">${esc(r.price_qualifier || "")}</span>
+      <div class="loft-main">
+        <div class="loft-addr" title="${esc(r.display_address || "")}">${esc(r.display_address || "")}</div>
+        <div class="loft-meta">${esc(meta)}</div>
+        <div class="loft-chips">${chips}</div>
       </div>
-      <div class="loft-meta">${esc(meta)}</div>
-      <div class="loft-addr">${esc(r.display_address || "")}</div>
-      <div class="loft-chips">${chips}</div>
       <div class="loft-foot">
-        <span>${added}${added && r.branch_name ? " · " : ""}${esc(r.branch_name || "")}</span>
-        ${r.property_url ? `<a href="${esc(r.property_url)}" target="_blank" rel="noopener">View ↗</a>` : ""}
+        ${added}${added && r.branch_name ? "<br>" : ""}${esc(r.branch_name || "")}
+        ${r.property_url ? `<br><a href="${esc(r.property_url)}" target="_blank" rel="noopener">View ↗</a>` : ""}
       </div>
     </div>`;
   }).join("");
+
+  if(btn){
+    btn.style.display = "";
+    btn.onclick = () => {
+      const urls = rows.map(r => r.property_url).filter(Boolean);
+      urls.forEach(u => window.open(u, "_blank", "noopener"));
+    };
+  }
 }
 
 function box(canvas, msg){
@@ -947,8 +1038,7 @@ function renderAll(){
   const p = palette();
   kpis();
   renderForecast(p);
-  renderAreaRank(p);
-  renderAreaSparklines(p);
+  renderAreaMap(p);
   renderAreaTable();
   renderLoftGrid();
   renderAsking(p);

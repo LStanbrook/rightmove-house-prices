@@ -53,19 +53,24 @@ qualifier. `dashboard.fragment.html` is the same page without the outer HTML
 skeleton, ready to publish as a Claude Artifact.
 
 The **by-area** section answers "which parts of Edinburgh are cheaper / dearer
-and how are they moving":
+and how are they moving" with one interactive map (Leaflet, free Esri basemap
+tiles, no API key) instead of separate price/trend charts:
 
-- *Median asking price by area* — the 17 core postcode districts (EH1–EH17)
-  ranked cheapest to dearest, with a city-median reference line; bars below the
-  city median are tinted differently.
-- *How every area is trending* — a small-multiples grid: one sparkline per
-  district (all 17, not just the extremes), each scaled to its own range, with
-  the current median and the % change since the first snapshot. Reads the shape
-  of each district's trend individually rather than forcing them onto one shared
-  axis.
-- *Area league table* — every district: listing count, median asking, % vs the
-  whole-city median, % currently reduced, median days listed, and **Δ since the
-  first snapshot** once ≥2 snapshots exist.
+- Each of the 17 core postcode districts is a marker at that district's real
+  centroid (median lat/lon of its own listings).
+- **Marker fill** = median asking price on a single-hue sequential scale
+  (light → dark = cheap → dear), so price *level* is legible straight off the
+  map.
+- **Marker ring colour** = trend since the first snapshot (green = up, red =
+  down, grey = flat) — price level and trend sit on the *same* map rather than
+  two separate widgets.
+- Every marker is permanently labelled with its district code and price (never
+  colour alone), and clicking one opens a popup with the full stats plus a
+  sparkline of its price history.
+- *Area league table* below the map gives the same numbers in an accessible,
+  sortable-by-eye table: listing count, median asking, % vs the whole-city
+  median, % currently reduced, median days listed, and **Δ since the first
+  snapshot** once ≥2 snapshots exist.
 
 District → neighbourhood names live in [rightmove_monitor/areas.py](rightmove_monitor/areas.py)
 (e.g. EH3 → "New Town, West End & Stockbridge"). The underlying per-area, per-day
@@ -90,16 +95,22 @@ client-side) against a weighted keyword ladder:
   foundry, printworks, bonded warehouse, whisky bond, mill/engine-works
   conversion, "loft apartment"/"loft-style"/"loft living", "warehouse loft"...
 - **medium** (2 pts) — supporting decor cues: exposed brick, mezzanine,
-  double-height, cast-iron columns, steel beams, industrial-style...
+  double-height, cast-iron columns, steel beams, industrial-style, exposed
+  ductwork/pipework, exposed or polished concrete, concrete ceilings — the
+  raw-brick-and-timber look and the sleeker exposed-concrete-and-services look
+  both count.
 - **light** (1 pt) — generic cues that also show up on ordinary flats: open
-  plan, exposed beams, high ceilings, and the bare word "loft" — deliberately
-  *not* weighted as strong, since in Scottish listings "loft" usually just means
-  an attic conversion in an ordinary house.
+  plan, exposed beams, high ceilings, spiral staircases, and the bare word
+  "loft" — deliberately *not* weighted as strong, since in Scottish listings
+  "loft" usually just means an attic conversion in an ordinary house.
 
-Listings scoring ≥3 show up in the **"Open-plan industrial lofts & warehouse
+Listings scoring ≥3 show up as a **list** (not a card grid — denser and easier
+to scan a lot of listings) in the **"Open-plan industrial lofts & warehouse
 conversions"** section of the dashboard, ranked highest-score-first, with the
-matched keywords, price, and a link straight to the listing. Also runs from the
-CLI:
+matched keywords, price and a link straight to the listing, plus an **"Open all
+in new tabs"** button that opens every current match at once (some browsers
+throttle multiple tabs from one click — allow pop-ups for the page if a few
+don't open). Also runs from the CLI:
 
 ```powershell
 .venv\Scripts\python -m rightmove_monitor.cli lofts --min-score 3 --limit 40

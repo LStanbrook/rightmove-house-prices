@@ -55,6 +55,11 @@ MEDIUM = [
     (r"industrial[- ]style", "industrial-style", 2),
     (r"warehouse[- ]style", "warehouse-style", 2),
     (r"factory conversion", "factory conversion", 2),
+    # Modern/finished industrial-style builds (concrete + services left on show),
+    # not just raw Victorian brick - a different but equally valid loft look.
+    (r"exposed (?:duct\s?work|pipe\s?work|services)", "exposed ductwork/pipework", 2),
+    (r"(?:exposed|polished) concrete", "exposed/polished concrete", 2),
+    (r"concrete ceiling", "concrete ceiling", 2),
 ]
 LIGHT = [
     (r"open[- ]plan", "open plan", 1),
@@ -63,6 +68,8 @@ LIGHT = [
     (r"vaulted ceiling", "vaulted ceiling", 1),
     (r"unique (?:living space|conversion|home)", "unique conversion", 1),
     (r"characterful conversion", "characterful conversion", 1),
+    (r"spiral stair", "spiral staircase", 1),
+    (r"split[- ]level", "split-level", 1),
     (r"\bloft\b(?!\s*(?:storage|hatch|ladder|insulation))", "loft (unspecified)", 1),
 ]
 ALL_PATTERNS = [(re.compile(p, re.I), label, w) for p, label, w in STRONG + MEDIUM + LIGHT]
