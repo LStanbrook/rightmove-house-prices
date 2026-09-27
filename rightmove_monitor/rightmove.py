@@ -303,6 +303,12 @@ def _flatten(p: dict, captured_at: datetime, snapshot_day: date) -> dict:
     if url and not url.startswith("http"):
         url = "https://www.rightmove.co.uk" + url
 
+    key_features = " | ".join(
+        f.get("description", "").strip()
+        for f in (p.get("keyFeatures") or [])
+        if isinstance(f, dict) and f.get("description")
+    ) or None
+
     return {
         "captured_at": captured_at.isoformat(),
         "snapshot_date": snapshot_day.isoformat(),
@@ -317,6 +323,8 @@ def _flatten(p: dict, captured_at: datetime, snapshot_day: date) -> dict:
         "size_sqft": size_sqft,
         "price_per_sqft": ppsf,
         "display_address": address.replace("\r", " ").replace("\n", " ").strip() or None,
+        "summary": (p.get("summary") or "").replace("\r", " ").replace("\n", " ").strip() or None,
+        "key_features": key_features,
         "postcode": postcode,
         "outcode": outcode,
         "latitude": location.get("latitude"),

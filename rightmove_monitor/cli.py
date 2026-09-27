@@ -29,6 +29,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("all", help="snapshot -> ukhpi -> analyse -> forecast -> dashboard")
     rs = sub.add_parser("resolve", help="look up a Rightmove location identifier")
     rs.add_argument("query")
+    lf = sub.add_parser("lofts", help="rank today's listings for industrial loft/warehouse style")
+    lf.add_argument("--min-score", type=int, default=3)
+    lf.add_argument("--limit", type=int, default=40)
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -69,6 +72,19 @@ def main(argv: list[str] | None = None) -> int:
         from .dashboard import build_dashboard
 
         build_dashboard(cfg)
+        return 0
+
+    if args.command == "lofts":
+        from .loft_finder import find_loft_candidates
+
+        found = find_loft_candidates(cfg, min_score=args.min_score, limit=args.limit)
+        if found.empty:
+            print("  no candidates (or today's snapshot predates text capture - run `snapshot` again)")
+            return 0
+        for _, r in found.iterrows():
+            print(f"  [{r['loft_score']}] £{r['price']:,.0f}  {r['display_address']}")
+            print(f"        {r['loft_matches']}")
+            print(f"        {r['property_url']}")
         return 0
 
     if args.command == "all":

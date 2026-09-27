@@ -58,9 +58,11 @@ and how are they moving":
 - *Median asking price by area* — the 17 core postcode districts (EH1–EH17)
   ranked cheapest to dearest, with a city-median reference line; bars below the
   city median are tinted differently.
-- *How the spread is trending* — median asking price per snapshot for the three
-  cheapest and three dearest districts (a short segment now, a trend line once
-  the daily run has history).
+- *How every area is trending* — a small-multiples grid: one sparkline per
+  district (all 17, not just the extremes), each scaled to its own range, with
+  the current median and the % change since the first snapshot. Reads the shape
+  of each district's trend individually rather than forcing them onto one shared
+  axis.
 - *Area league table* — every district: listing count, median asking, % vs the
   whole-city median, % currently reduced, median days listed, and **Δ since the
   first snapshot** once ≥2 snapshots exist.
@@ -76,6 +78,41 @@ Rightmove location identifier with:
 ```powershell
 .venv\Scripts\python -m rightmove_monitor.cli resolve "Leith"
 ```
+
+### Finding a specific style: open-plan industrial lofts / warehouse conversions
+
+[`rightmove_monitor/loft_finder.py`](rightmove_monitor/loft_finder.py) scans every
+current listing's free-text `summary` and `key_features` (Rightmove's own
+`keywords` search parameter doesn't actually filter results, so this is done
+client-side) against a weighted keyword ladder:
+
+- **strong** (3 pts) — terms basically unique to a real conversion: warehouse,
+  foundry, printworks, bonded warehouse, whisky bond, mill/engine-works
+  conversion, "loft apartment"/"loft-style"/"loft living", "warehouse loft"...
+- **medium** (2 pts) — supporting decor cues: exposed brick, mezzanine,
+  double-height, cast-iron columns, steel beams, industrial-style...
+- **light** (1 pt) — generic cues that also show up on ordinary flats: open
+  plan, exposed beams, high ceilings, and the bare word "loft" — deliberately
+  *not* weighted as strong, since in Scottish listings "loft" usually just means
+  an attic conversion in an ordinary house.
+
+Listings scoring ≥3 show up in the **"Open-plan industrial lofts & warehouse
+conversions"** section of the dashboard, ranked highest-score-first, with the
+matched keywords, price, and a link straight to the listing. Also runs from the
+CLI:
+
+```powershell
+.venv\Scripts\python -m rightmove_monitor.cli lofts --min-score 3 --limit 40
+```
+
+`summary`/`key_features` are only captured in snapshots from the date this was
+added — it re-scans fresh every day the monitor runs, so this is a live watch,
+not a one-off search. Edinburgh's own industrial-conversion stock clusters
+mostly in **Leith** (EH6 — converted whisky bonds/warehouses around the Shore),
+**Tanfield/Canonmills** (EH3 — the former print works), **Powderhall** (EH7 —
+the old foundry site) and **Fountainbridge** (EH3/EH11 — former brewery land,
+mostly new-build in an industrial idiom rather than true conversions) — worth
+watching those areas directly as well as the scored list.
 
 ## Run it daily — in the cloud (GitHub Actions)
 
