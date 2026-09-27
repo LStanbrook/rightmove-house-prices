@@ -316,8 +316,6 @@ _TEMPLATE = r"""
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
   :root{
     --page:#f4f5f7; --surface:#ffffff; --surface-2:#fafbfc;
@@ -401,43 +399,6 @@ _TEMPLATE = r"""
   .lt .oc{color:var(--muted);font-family:var(--mono);font-size:11px}
   .scroller{overflow-x:auto}
 
-  /* small inline SVG sparkline, reused both in map popups and nowhere else now */
-  .spark-svg{display:block}
-  .spark-svg .fill{opacity:.14}
-  .spark-svg .dot{opacity:1}
-
-  #area-map{height:520px;border-radius:var(--radius) var(--radius) 0 0;
-    background:var(--surface-2);z-index:0}
-  .map-legend{display:flex;flex-wrap:wrap;align-items:center;gap:18px;
-    border:1px solid var(--hair);border-top:0;border-radius:0 0 var(--radius) var(--radius);
-    background:var(--surface);padding:10px 16px;font-size:11px;color:var(--ink-2)}
-  .map-legend .lg-group{display:flex;align-items:center;gap:6px}
-  .map-legend .lg-label{color:var(--muted);text-transform:uppercase;letter-spacing:.05em;font-size:10px}
-  .map-legend .lg-swatch{width:16px;height:10px;border-radius:2px;display:inline-block}
-  .map-legend .lg-ring{width:10px;height:10px;border-radius:50%;display:inline-block;
-    border:2px solid; background:var(--surface-2)}
-  /* Leaflet chrome, themed to match the page rather than its own default palette */
-  .leaflet-container{background:var(--surface-2);font-family:var(--sans)}
-  .leaflet-control-zoom a{background:var(--surface)!important;color:var(--ink)!important;
-    border-color:var(--hair)!important}
-  .leaflet-control-attribution{background:color-mix(in srgb, var(--surface) 85%, transparent)!important;
-    color:var(--muted)!important;font-size:10px!important}
-  .leaflet-control-attribution a{color:var(--ink-2)!important}
-  .map-label{background:var(--surface);border:1px solid var(--hair)!important;color:var(--ink);
-    font-family:var(--mono);font-size:10.5px;font-weight:600;padding:2px 6px!important;
-    border-radius:99px;box-shadow:none!important;white-space:nowrap}
-  .map-label::before{display:none}
-  .leaflet-popup-content-wrapper{background:var(--surface);color:var(--ink);
-    border-radius:var(--radius);box-shadow:0 4px 18px rgba(0,0,0,.18)}
-  .leaflet-popup-tip{background:var(--surface)}
-  .leaflet-popup-close-button{color:var(--muted)!important}
-  .map-pop{min-width:190px}
-  .map-pop .mp-name{font-size:13px;font-weight:600;margin-bottom:1px}
-  .map-pop .mp-oc{color:var(--muted);font-family:var(--mono);font-weight:400;font-size:11px}
-  .map-pop .mp-price{font-family:var(--mono);font-size:16px;font-weight:600;margin-top:4px}
-  .map-pop .mp-row{font-size:11.5px;color:var(--ink-2);margin-top:2px}
-  .map-pop .mp-spark{margin-top:8px}
-
   .loft-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;
     flex-wrap:wrap;margin-bottom:12px}
   .loft-count{font-size:12px;color:var(--ink-2)}
@@ -505,19 +466,16 @@ _TEMPLATE = r"""
 
   <h2>Cheaper vs dearer — Edinburgh by area</h2>
   <div class="card">
-    <p class="ct">Price level &amp; trend, by area</p>
-    <p class="cs">One map: marker fill = median asking price (light = cheap, dark = dear); marker ring =
-      how that area has moved since the first snapshot (green = up, red = down, grey = flat). Click a marker for the
-      full trend. Every district labelled directly, so you don't need the legend to read a value.</p>
-    <div id="area-map"></div>
-    <div class="map-legend">
-      <div class="lg-group"><span class="lg-label">Price</span><span id="lg-price"></span></div>
-      <div class="lg-group"><span class="lg-label">Trend</span>
-        <span class="lg-ring" id="lg-ring-up" style="border-color:var(--up)"></span> up
-        <span class="lg-ring" id="lg-ring-down" style="border-color:var(--down)"></span> down
-        <span class="lg-ring" id="lg-ring-flat" style="border-color:var(--muted)"></span> flat
-      </div>
-    </div>
+    <p class="ct">Median asking price by area</p>
+    <p class="cs">Postcode districts, cheapest to dearest. Dashed line = city median. Numbers after each bar are listing counts.</p>
+    <div class="chartbox h-tall"><canvas id="c-area-rank"></canvas></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <p class="ct">How every area is trending</p>
+    <p class="cs" id="area-trend-cs">Median asking price per snapshot, every district on one chart. Lines are
+      shaded by price level (light = cheap, dark = dear) and labelled at the right-hand end — hover a line for its
+      exact values.</p>
+    <div class="chartbox h-tall" style="height:420px"><canvas id="c-area-trend"></canvas></div>
   </div>
   <div class="card" style="margin-top:16px">
     <p class="ct">Area league table</p>
@@ -800,36 +758,6 @@ function renderQual(p){
     options:o }));
 }
 
-// A sparkline is scaled to ITS OWN min/max (standard small-multiples practice) -
-// price LEVELS aren't comparable across sparklines, only the shape and the
-// labelled price/delta are. Reused inside each area's map popup.
-function buildSpark(points, w, h){
-  const idx = points.map((v,i)=>({i,v})).filter(d => d.v != null);
-  if(idx.length === 0) return null;
-  const vals = idx.map(d=>d.v);
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  if(lo === hi){ lo -= Math.max(1, lo*0.02); hi += Math.max(1, hi*0.02); }
-  const padY = (hi-lo)*0.12; lo -= padY; hi += padY;
-  const n = points.length;
-  const x = i => n<=1 ? w/2 : (i/(n-1))*(w-6)+3;
-  const y = v => h - 4 - ((v-lo)/(hi-lo))*(h-9);
-  let d = "", started = false;
-  idx.forEach(({i,v}) => { d += `${started?"L":"M"}${x(i).toFixed(1)},${y(v).toFixed(1)} `; started = true; });
-  const first = idx[0], last = idx[idx.length-1];
-  const area = `${d}L${x(last.i).toFixed(1)},${h} L${x(first.i).toFixed(1)},${h} Z`;
-  return { path:d.trim(), area, lastX:x(last.i), lastY:y(last.v), firstV:first.v, lastV:last.v };
-}
-
-function sparkSvg(points, color){
-  const sp = buildSpark(points, 150, 38);
-  if(!sp) return '<div class="empty" style="height:38px;font-size:10px">no history yet</div>';
-  return `<svg class="spark-svg" width="150" height="38" viewBox="0 0 150 38" preserveAspectRatio="none">
-    <path class="fill" d="${sp.area}" fill="${color}" stroke="none"></path>
-    <path d="${sp.path}" fill="none" stroke="${color}" stroke-width="1.75" stroke-linejoin="round" stroke-linecap="round"></path>
-    <circle class="dot" cx="${sp.lastX.toFixed(1)}" cy="${sp.lastY.toFixed(1)}" r="2.8" fill="${color}"></circle>
-  </svg>`;
-}
-
 function isDarkTheme(){
   const t = document.documentElement.getAttribute("data-theme");
   if(t === "dark") return true;
@@ -837,81 +765,112 @@ function isDarkTheme(){
   return window.matchMedia("(prefers-color-scheme: dark)").matches;
 }
 
-let AREA_MAP = null;
-function renderAreaMap(p){
-  const host = document.getElementById("area-map");
-  if(!host || typeof L === "undefined") return;
-  const rows = (DATA.by_area || []).filter(r => r.lat != null && r.lon != null);
-  if(AREA_MAP){ AREA_MAP.remove(); AREA_MAP = null; }
-  if(rows.length === 0){
-    host.innerHTML = '<div class="empty" style="height:100%">No area data in the latest snapshot.</div>';
-    return;
-  }
-
-  // Sequential single-hue scale (light -> dark blue) over the real price range -
-  // magnitude, so one hue, never a rainbow. Built from the data's own quantiles.
-  const prices = rows.map(r => r.median).sort((a,b) => a-b);
+// Sequential single-hue scale (light -> dark blue) over the real price range -
+// magnitude, so one hue, never a rainbow. Built from the data's own quantiles,
+// shared by the rank chart and the trend chart so a district reads the same
+// colour in both.
+function priceColorScale(rows){
+  const prices = rows.map(r => r.median).slice().sort((a,b) => a-b);
   const qAt = f => prices[Math.min(prices.length-1, Math.round(f*(prices.length-1)))];
   const steps = [qAt(0), qAt(.2), qAt(.4), qAt(.6), qAt(.8), qAt(1)];
   // Light mode: cheap=light blue -> dear=dark blue (dark pops on a light surface).
-  // Dark mode: the same family, reversed - a dark step recedes into a near-black
-  // basemap the way a light step recedes into a white one, so cheap=dark blue,
-  // dear=light blue keeps "further from the surface = higher value" true in both.
+  // Dark mode: the same family, reversed - a dark step recedes into the dark
+  // surface the way a light step recedes into a white one, so "further from the
+  // surface = higher value" stays true in both.
   const rampLight = ["#cde2fb","#9ec5f4","#6da7ec","#3987e5","#1c5cab","#0d366b"];
-  const dark = isDarkTheme();
-  const ramp = dark ? rampLight.slice().reverse() : rampLight;
-  function priceColor(v){
+  const ramp = isDarkTheme() ? rampLight.slice().reverse() : rampLight;
+  return v => {
     for(let i=steps.length-1;i>=0;i--) if(v >= steps[i]) return ramp[Math.min(i, ramp.length-1)];
     return ramp[0];
-  }
+  };
+}
 
-  const bySeg = {}; (DATA.area_trend ? DATA.area_trend.series : []).forEach(s => bySeg[s.seg] = s);
-  const moverBySeg = {}; (DATA.area_movers || []).forEach(m => moverBySeg[m.seg] = m);
+function renderAreaRank(p){
+  const el = $("#c-area-rank"); const rows = DATA.by_area || [];
+  if(!el || el.tagName!=="CANVAS"){ return; }
+  if(rows.length===0){ box(el,"No area data in the latest snapshot."); return; }
+  const cityMed = DATA.city_median;
+  const priceColor = priceColorScale(rows);
+  const o = baseOpts(p);
+  o.indexAxis = "y";
+  o.layout.padding.right = 34;
+  o.plugins.tooltip.callbacks = {
+    title: it => `${rows[it[0].dataIndex].seg} · ${rows[it[0].dataIndex].name}`,
+    label: it => {
+      const r = rows[it.dataIndex];
+      const vs = (r.vs_city>=0?"+":"") + (100*r.vs_city).toFixed(0) + "% vs city";
+      return [`${gbp0(r.median)}  (${vs})`, `${r.n} listings · ${r.pct_reduced.toFixed(0)}% reduced`];
+    },
+  };
+  o.scales.x.ticks.callback = v => gbpK(v);
+  o.scales.y.ticks.font = { family:"IBM Plex Mono", size:11 };
+  o.scales.y.afterFit = sc => { sc.width = Math.max(sc.width, 46); };
+  const cnt = { id:"arcnt", afterDatasetsDraw(ch){
+    const {ctx} = ch; ctx.save();
+    ctx.font = "10px 'IBM Plex Mono'"; ctx.fillStyle = p.muted; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    ch.getDatasetMeta(0).data.forEach((b,i)=>ctx.fillText(rows[i].n, b.x + 6, b.y));
+    ctx.restore();
+  }};
+  const refline = { id:"arref", afterDatasetsDraw(ch){
+    if(cityMed==null) return;
+    const x = ch.scales.x.getPixelForValue(cityMed);
+    const {top,bottom} = ch.chartArea; const {ctx} = ch;
+    ctx.save();
+    ctx.strokeStyle = p.ink2; ctx.setLineDash([4,3]); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x,top); ctx.lineTo(x,bottom); ctx.stroke();
+    ctx.setLineDash([]); ctx.fillStyle = p.ink2; ctx.font = "9px 'IBM Plex Mono'"; ctx.textAlign = "center";
+    ctx.fillText("city median", x, top - 3);
+    ctx.restore();
+  }};
+  CHARTS.push(new Chart(el, { type:"bar", data:{ labels:rows.map(r=>r.seg),
+    datasets:[{ data:rows.map(r=>r.median), backgroundColor:rows.map(r=>priceColor(r.median)),
+      borderRadius:3, maxBarThickness:20 }] },
+    options:o, plugins:[cnt, refline] }));
+}
 
-  AREA_MAP = L.map(host, { scrollWheelZoom:false, attributionControl:true })
-    .setView([55.9518, -3.2100], 12);
-  AREA_MAP.on("click", () => AREA_MAP.scrollWheelZoom.enable());
-  // Esri's Canvas basemaps: free, no API key, and conveniently come as a
-  // matched light/dark pair (unlike most keyless tile hosts, which are light-only).
-  const canvas = dark ? "World_Dark_Gray_Base" : "World_Light_Gray_Base";
-  L.tileLayer(`https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/${canvas}/MapServer/tile/{z}/{y}/{x}`, {
-    maxZoom: 16,
-    attribution: "Esri, HERE, Garmin, &copy; OpenStreetMap contributors, GIS community",
-  }).addTo(AREA_MAP);
+function renderAreaTrendAll(p){
+  const el = $("#c-area-trend"); const at = DATA.area_trend; const ranked = DATA.by_area || [];
+  if(!el || el.tagName!=="CANVAS"){ return; }
+  if(!at || at.series.length===0 || ranked.length===0){ box(el,"No area history yet."); return; }
+  const priceColor = priceColorScale(ranked);
+  const bySeg = {}; at.series.forEach(s => bySeg[s.seg] = s);
+  const series = ranked.filter(r => bySeg[r.seg]).map(r => ({ r, s: bySeg[r.seg] }));
+  const one = at.dates.length < 2;
 
-  rows.forEach(r => {
-    const mover = moverBySeg[r.seg];
-    const trendColor = !mover ? p.muted
-      : mover.pct > 0.5 ? p.up : (mover.pct < -0.5 ? p.down : p.muted);
-    const radius = 9 + 7 * Math.sqrt(r.n / Math.max(...rows.map(x=>x.n)));
-    const marker = L.circleMarker([r.lat, r.lon], {
-      radius, weight:3, color:trendColor, fillColor:priceColor(r.median),
-      fillOpacity:.88, opacity:.9,
-    }).addTo(AREA_MAP);
-    marker.bindTooltip(`${r.seg} ${gbpK(r.median)}`, {
-      permanent:true, direction:"top", className:"map-label", offset:[0,-radius+2],
-    });
-    const series = bySeg[r.seg];
-    const spark = series ? sparkSvg(series.points, trendColor) : "";
-    const moverLine = mover
-      ? `<div class="mp-row">${mover.from} → ${mover.to}: ${pct1(mover.pct)}</div>` : "";
-    marker.bindPopup(`<div class="map-pop">
-      <div class="mp-name">${r.name} <span class="mp-oc">${r.seg}</span></div>
-      <div class="mp-price">${gbp0(r.median)}</div>
-      <div class="mp-row">${(r.vs_city>=0?"+":"")+(100*r.vs_city).toFixed(0)}% vs city median</div>
-      <div class="mp-row">${r.n} listings · ${r.pct_reduced.toFixed(0)}% reduced</div>
-      ${moverLine}
-      <div class="mp-spark">${spark}</div>
-    </div>`);
-  });
+  const o = baseOpts(p);
+  o.layout.padding.right = 40;
+  o.interaction = { mode:"nearest", intersect:true };
+  o.plugins.tooltip.callbacks = {
+    title: it => it[0].label,
+    label: it => `${series[it.datasetIndex].r.name} (${it.dataset.label})  ${gbp0(it.raw)}`,
+  };
+  o.scales.x.ticks.maxTicksLimit = 10;
+  o.scales.y.ticks.callback = v => gbpK(v);
 
-  // Legend gradient, built from the same steps/ramp the map just used.
-  const lg = document.getElementById("lg-price");
-  if(lg){
-    lg.innerHTML = steps.slice(0,-1).map((s,i) =>
-      `<span class="lg-swatch" style="background:${ramp[i]}"></span>`
-    ).join("") + ` <span style="font-family:var(--mono)">${gbpK(steps[0])} → ${gbpK(steps[steps.length-1])}</span>`;
-  }
+  const endLabels = { id:"arlabels", afterDatasetsDraw(ch){
+    const {ctx} = ch; ctx.save();
+    ctx.font = "10px 'IBM Plex Mono'"; ctx.textBaseline = "middle"; ctx.textAlign = "left";
+    const marks = ch.data.datasets.map((ds,i) => {
+      const meta = ch.getDatasetMeta(i);
+      const pts = meta.data.filter((pt,j) => ds.data[j] != null);
+      if(pts.length===0) return null;
+      const last = pts[pts.length-1];
+      return { x:last.x, y:last.y, color:ds.borderColor, label:ds.label };
+    }).filter(Boolean).sort((a,b) => a.y-b.y);
+    // declutter: enforce a minimum vertical gap between neighbouring end-labels
+    for(let i=1;i<marks.length;i++){
+      if(marks[i].y - marks[i-1].y < 11) marks[i].y = marks[i-1].y + 11;
+    }
+    marks.forEach(m => { ctx.fillStyle = m.color; ctx.fillText(m.label, m.x + 6, m.y); });
+    ctx.restore();
+  }};
+
+  CHARTS.push(new Chart(el, { type:"line", data:{ labels:at.dates,
+    datasets: series.map(({r,s}) => ({
+      label: r.seg, data: s.points, borderColor: priceColor(r.median),
+      backgroundColor: priceColor(r.median), borderWidth: 1.75, tension:.2,
+      pointRadius: one?3:0, pointHoverRadius:4, spanGaps:true,
+    })) }, options:o, plugins:[endLabels] }));
 }
 
 function renderAreaTable(){
@@ -1038,7 +997,8 @@ function renderAll(){
   const p = palette();
   kpis();
   renderForecast(p);
-  renderAreaMap(p);
+  renderAreaRank(p);
+  renderAreaTrendAll(p);
   renderAreaTable();
   renderLoftGrid();
   renderAsking(p);
