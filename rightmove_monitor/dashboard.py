@@ -15,7 +15,7 @@ import pandas as pd
 
 from .areas import area_short
 from .config import Config
-from .loft_finder import score_listings
+from .loft_finder import new_since_previous_snapshot, score_listings, update_loft_history
 
 CORE_OUTCODES = [f"EH{i}" for i in range(1, 18)]
 BED_ORDER = ["Studio", "1", "2", "3", "4", "5", "6+"]
@@ -137,6 +137,13 @@ def build_payload(cfg: Config) -> dict:
         candidates = scored[scored["loft_score"] >= LOFT_MIN_SCORE].sort_values(
             ["loft_score", "price"], ascending=[False, True]
         )
+
+        new_ids: set[str] = set()
+        n_dropped = 0
+        if not candidates.empty:
+            hist = update_loft_history(cfg, candidates, snap_day)
+            new_ids, n_dropped = new_since_previous_snapshot(hist, snap_day)
+
         payload["loft_candidates"] = [
             {
                 "id": r["id"],
@@ -150,14 +157,18 @@ def build_payload(cfg: Config) -> dict:
                 "outcode": _s(r.get("outcode")),
                 "size_sqft": _to_int_or_none(r.get("size_sqft")),
                 "added_or_reduced": _s(r.get("added_or_reduced")),
+                "first_visible_date": _iso(r.get("first_visible_date")),
                 "branch_name": _s(r.get("branch_name")),
                 "property_url": _s(r.get("property_url")),
+                "is_new": str(r["id"]) in new_ids,
             }
-            for _, r in candidates.head(24).iterrows()
+            for _, r in candidates.head(60).iterrows()
         ]
         payload["loft_text_available"] = bool(
             "summary" in raw.columns or "key_features" in raw.columns
         )
+        payload["loft_new_count"] = len(new_ids)
+        payload["loft_dropped_count"] = n_dropped
 
     # --- Rightmove series over time --------------------------------------
     ts_path = P / "market_timeseries.csv"
@@ -270,6 +281,13 @@ def _to_int_or_none(v):
 def _s(v):
     """None-safe passthrough for pandas string columns (NaN is truthy in `x or None`)."""
     return None if pd.isna(v) else v
+
+
+def _iso(v):
+    """None-safe ISO string for a pandas Timestamp (json.dumps can't serialize those directly)."""
+    if pd.isna(v):
+        return None
+    return v.isoformat() if hasattr(v, "isoformat") else str(v)
 
 
 # --------------------------------------------------------------------------- #
@@ -403,11 +421,20 @@ _TEMPLATE = r"""
     flex-wrap:wrap;margin-bottom:12px}
   .loft-count{font-size:12px;color:var(--ink-2)}
   .loft-count b{color:var(--ink);font-family:var(--mono)}
+  .loft-count .delta-new{color:var(--up);font-weight:600}
+  .loft-count .delta-gone{color:var(--muted)}
   .btn{font:600 12px var(--sans);color:#fff;background:var(--accent);border:none;
     border-radius:7px;padding:7px 13px;cursor:pointer;white-space:nowrap}
   .btn:hover{filter:brightness(1.08)}
   .btn:active{filter:brightness(.94)}
   .btn-note{font-size:10.5px;color:var(--muted);margin-top:6px}
+
+  .seg{display:inline-flex;border:1px solid var(--hair);border-radius:7px;overflow:hidden}
+  .seg-btn{font:600 11.5px var(--sans);color:var(--ink-2);background:var(--surface);
+    border:none;border-right:1px solid var(--hair);padding:6px 11px;cursor:pointer;white-space:nowrap}
+  .seg-btn:last-child{border-right:0}
+  .seg-btn:hover{background:var(--surface-2)}
+  .seg-btn.active{background:var(--accent);color:#fff}
 
   .loft-list{display:flex;flex-direction:column;border:1px solid var(--hair);border-radius:var(--radius);
     overflow:hidden}
@@ -415,6 +442,10 @@ _TEMPLATE = r"""
     border-bottom:1px solid var(--hair)}
   .loft-row:last-child{border-bottom:0}
   .loft-row:nth-child(even){background:var(--surface-2)}
+  .loft-row.is-new{box-shadow:inset 3px 0 0 var(--up)}
+  .loft-new-tag{flex:0 0 auto;font-family:var(--mono);font-size:9.5px;font-weight:700;
+    letter-spacing:.04em;color:var(--up);background:color-mix(in srgb, var(--up) 14%, transparent);
+    padding:3px 7px;border-radius:99px;white-space:nowrap}
   .loft-score{flex:0 0 auto;font-family:var(--mono);font-size:10.5px;font-weight:600;
     padding:3px 9px;border-radius:99px;white-space:nowrap}
   .loft-score.strong{background:var(--accent-soft);color:var(--accent)}
@@ -488,9 +519,14 @@ _TEMPLATE = r"""
     <p class="ct">Today's closest matches</p>
     <p class="cs" id="loft-cs">Every current listing's description and key features, scanned for warehouse/loft/mill-conversion
       language (warehouse, foundry, printworks, bonded warehouse…) and supporting decor cues (exposed brick, mezzanine,
-      double-height, exposed concrete/ductwork, open plan…). Sorted by how strong the match is, cheapest first within a tier.</p>
+      double-height, exposed concrete/ductwork, open plan…). Re-scanned fresh every day, so this isn't the same fixed
+      list — sort by newest to see what's changed, and new matches are flagged.</p>
     <div class="loft-actions">
-      <span class="loft-count"><b id="loft-n">0</b> matches today</span>
+      <span class="loft-count"><b id="loft-n">0</b> matches<span id="loft-delta"></span></span>
+      <span class="seg" id="loft-sort" role="group" aria-label="Sort">
+        <button class="seg-btn active" data-sort="score" type="button">Best match</button>
+        <button class="seg-btn" data-sort="new" type="button">Newest listed</button>
+      </span>
       <button class="btn" id="loft-open-all" type="button">Open all in new tabs ↗</button>
     </div>
     <div id="loft-grid" class="loft-list"></div>
@@ -907,12 +943,35 @@ function esc(s){
   }[c]));
 }
 
+let LOFT_SORT = "score"; // "score" (payload's default order) or "new" (most recently listed first)
+
+function sortedLoftRows(){
+  const rows = (DATA.loft_candidates || []).slice();
+  if(LOFT_SORT === "new"){
+    rows.sort((a,b) => {
+      const ta = a.first_visible_date ? new Date(a.first_visible_date).getTime() : 0;
+      const tb = b.first_visible_date ? new Date(b.first_visible_date).getTime() : 0;
+      return tb - ta || b.score - a.score;
+    });
+  }
+  return rows;
+}
+
 function renderLoftGrid(){
   const host = $("#loft-grid"); if(!host) return;
-  const rows = DATA.loft_candidates || [];
+  const all = DATA.loft_candidates || [];
   const btn = $("#loft-open-all");
+  const seg = $("#loft-sort");
   const nEl = $("#loft-n");
-  if(nEl) nEl.textContent = rows.length;
+  const deltaEl = $("#loft-delta");
+  if(nEl) nEl.textContent = all.length;
+  if(deltaEl){
+    const nNew = DATA.loft_new_count || 0, nGone = DATA.loft_dropped_count || 0;
+    const parts = [];
+    if(nNew) parts.push(`<span class="delta-new">+${nNew} new</span>`);
+    if(nGone) parts.push(`<span class="delta-gone">${nGone} no longer matching</span>`);
+    deltaEl.innerHTML = parts.length ? ` · since yesterday: ${parts.join(", ")}` : "";
+  }
 
   if(!DATA.loft_text_available){
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
@@ -920,16 +979,27 @@ function renderLoftGrid(){
       "and key features, and this list will fill in.</div>";
     $("#loft-cs").style.display = "none";
     if(btn) btn.style.display = "none";
+    if(seg) seg.style.display = "none";
     return;
   }
-  if(rows.length === 0){
+  if(all.length === 0){
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
       "No strong industrial-loft matches in today's snapshot. That's normal — this stock turns over slowly. " +
       "Check back after the next daily run.</div>";
     if(btn) btn.style.display = "none";
+    if(seg) seg.style.display = "none";
     return;
   }
 
+  if(seg){
+    seg.style.display = "";
+    seg.querySelectorAll(".seg-btn").forEach(b => {
+      b.classList.toggle("active", b.dataset.sort === LOFT_SORT);
+      b.onclick = () => { LOFT_SORT = b.dataset.sort; renderLoftGrid(); };
+    });
+  }
+
+  const rows = sortedLoftRows();
   host.innerHTML = rows.map(r => {
     const tier = r.score >= 6 ? "strong" : "maybe";
     const beds = r.bedrooms == null ? "" : `${r.bedrooms} bed`;
@@ -937,7 +1007,9 @@ function renderLoftGrid(){
     const meta = [beds, r.property_sub_type, size].filter(Boolean).join(" · ");
     const chips = r.matches.map(m => `<span class="loft-chip">${esc(m)}</span>`).join("");
     const added = r.added_or_reduced ? esc(r.added_or_reduced) : "";
-    return `<div class="loft-row">
+    const newTag = r.is_new ? '<span class="loft-new-tag">NEW</span>' : "";
+    return `<div class="loft-row${r.is_new ? " is-new" : ""}">
+      ${newTag}
       <span class="loft-score ${tier}">${r.score}</span>
       <span class="loft-price">${gbp0(r.price)}</span>
       <span class="loft-qual">${esc(r.price_qualifier || "")}</span>
@@ -956,7 +1028,7 @@ function renderLoftGrid(){
   if(btn){
     btn.style.display = "";
     btn.onclick = () => {
-      const urls = rows.map(r => r.property_url).filter(Boolean);
+      const urls = all.map(r => r.property_url).filter(Boolean);
       urls.forEach(u => window.open(u, "_blank", "noopener"));
     };
   }

@@ -106,19 +106,31 @@ client-side) against a weighted keyword ladder:
 
 Listings scoring ≥3 show up as a **list** (not a card grid — denser and easier
 to scan a lot of listings) in the **"Open-plan industrial lofts & warehouse
-conversions"** section of the dashboard, ranked highest-score-first, with the
-matched keywords, price and a link straight to the listing, plus an **"Open all
-in new tabs"** button that opens every current match at once (some browsers
-throttle multiple tabs from one click — allow pop-ups for the page if a few
-don't open). Also runs from the CLI:
+conversions"** section of the dashboard, with the matched keywords, price and a
+link straight to the listing, plus an **"Open all in new tabs"** button that
+opens every current match at once (some browsers throttle multiple tabs from
+one click — allow pop-ups for the page if a few don't open). Also runs from
+the CLI:
 
 ```powershell
 .venv\Scripts\python -m rightmove_monitor.cli lofts --min-score 3 --limit 40
 ```
 
+It re-scans fresh every day the monitor runs — this is a live watch, not a
+one-off search, and it's built to surface *change*, not just repeat the same
+top match forever:
+
+- **Best match / Newest listed** toggle — the default ranks by score, but a
+  strong match that's been sitting on the market for months will otherwise
+  dominate every single day; switching to *Newest listed* re-sorts by when
+  Rightmove first listed it, so you can specifically see what's fresh.
+- **NEW badge** — any match whose Rightmove ID wasn't in yesterday's match list
+  is flagged, and the header shows a running "+N new · M no longer matching"
+  since the previous run. This is tracked in `data/processed/loft_history.csv`
+  (one row per day per match), separate from the day's full snapshot.
+
 `summary`/`key_features` are only captured in snapshots from the date this was
-added — it re-scans fresh every day the monitor runs, so this is a live watch,
-not a one-off search. Edinburgh's own industrial-conversion stock clusters
+added. Edinburgh's own industrial-conversion stock clusters
 mostly in **Leith** (EH6 — converted whisky bonds/warehouses around the Shore),
 **Tanfield/Canonmills** (EH3 — the former print works), **Powderhall** (EH7 —
 the old foundry site) and **Fountainbridge** (EH3/EH11 — former brewery land,
@@ -189,6 +201,7 @@ data/
   processed/
     snapshot_index.csv                       one row per snapshot run
     listings_history.parquet                 one row per listing, price path + time on market
+    loft_history.csv                         one row per day per loft/warehouse match (for the NEW badge)
     market_timeseries.csv / .parquet         daily market aggregates
     market_timeseries_by_segment.csv         daily aggregates by type / beds / outcode
     forecast_ukhpi.csv                       actual + 12-month forecast with intervals

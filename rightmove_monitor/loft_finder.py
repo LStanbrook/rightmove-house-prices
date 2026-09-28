@@ -128,3 +128,59 @@ def find_loft_candidates(cfg: Config, *, min_score: int = 3, limit: int = 40) ->
         "added_or_reduced", "branch_name", "property_url",
     ]
     return out[[c for c in cols if c in out.columns]].head(limit).reset_index(drop=True)
+
+
+# --------------------------------------------------------------------------- #
+# Day-over-day history, so the dashboard can show what's NEW rather than the
+# same top-scoring listing every single day it stays on the market.
+# --------------------------------------------------------------------------- #
+LOFT_HISTORY_NAME = "loft_history.csv"
+_HISTORY_COLUMNS = [
+    "snapshot_date", "id", "score", "price", "display_address", "outcode", "property_url",
+]
+
+
+def update_loft_history(cfg: Config, candidates: pd.DataFrame, snapshot_date: str) -> pd.DataFrame:
+    """Append today's matches (as scored for the dashboard) to the running log.
+
+    Re-running for the same date replaces that date's rows rather than
+    duplicating them.
+    """
+    path = cfg.processed_dir / LOFT_HISTORY_NAME
+    existing = pd.read_csv(path) if path.exists() else pd.DataFrame(columns=_HISTORY_COLUMNS)
+
+    today = pd.DataFrame({
+        "snapshot_date": snapshot_date,
+        "id": candidates["id"].astype(str),
+        "score": candidates["loft_score"].astype(int),
+        "price": candidates["price"],
+        "display_address": candidates.get("display_address", ""),
+        "outcode": candidates.get("outcode", ""),
+        "property_url": candidates.get("property_url", ""),
+    })
+    combined = pd.concat(
+        [existing[existing["snapshot_date"] != snapshot_date], today], ignore_index=True
+    )
+    combined = combined.sort_values(["snapshot_date", "score"], ascending=[True, False])
+    combined.to_csv(path, index=False)
+    return combined
+
+
+def new_since_previous_snapshot(history: pd.DataFrame, snapshot_date: str) -> tuple[set[str], int]:
+    """(ids new to the match list today, count no longer matching since the day before).
+
+    On the first day of history there is nothing to compare against, so
+    nothing is flagged "new" (everything would trivially be new).
+    """
+    if history.empty:
+        return set(), 0
+    dates = sorted(history["snapshot_date"].unique())
+    if snapshot_date not in dates:
+        return set(), 0
+    idx = dates.index(snapshot_date)
+    if idx == 0:
+        return set(), 0
+    prev_date = dates[idx - 1]
+    today_ids = set(history.loc[history["snapshot_date"] == snapshot_date, "id"].astype(str))
+    prev_ids = set(history.loc[history["snapshot_date"] == prev_date, "id"].astype(str))
+    return today_ids - prev_ids, len(prev_ids - today_ids)
