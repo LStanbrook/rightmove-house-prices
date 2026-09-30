@@ -423,6 +423,21 @@ _TEMPLATE = r"""
   .loft-count b{color:var(--ink);font-family:var(--mono)}
   .loft-count .delta-new{color:var(--up);font-weight:600}
   .loft-count .delta-gone{color:var(--muted)}
+
+  .price-filter{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);
+    font-size:11.5px;color:var(--ink-2)}
+  .price-filter .pf-label{font-family:var(--sans);font-weight:600;text-transform:uppercase;
+    letter-spacing:.05em;font-size:10px;color:var(--muted);margin-right:2px}
+  .price-filter .pf-dash{color:var(--muted)}
+  .price-filter input{width:76px;font:600 11.5px var(--mono);color:var(--ink);background:var(--surface);
+    border:1px solid var(--hair);border-radius:6px;padding:5px 6px;
+    font-variant-numeric:tabular-nums}
+  .price-filter input::placeholder{color:var(--muted);font-weight:400}
+  .price-filter input:focus{outline:2px solid var(--accent-soft);outline-offset:1px}
+  .price-filter .pf-clear{color:var(--accent);font-family:var(--sans);font-weight:600;
+    font-size:11px;text-decoration:none;margin-left:2px}
+  .price-filter .pf-clear:hover{text-decoration:underline}
+
   .btn{font:600 12px var(--sans);color:#fff;background:var(--accent);border:none;
     border-radius:7px;padding:7px 13px;cursor:pointer;white-space:nowrap}
   .btn:hover{filter:brightness(1.08)}
@@ -490,7 +505,9 @@ _TEMPLATE = r"""
   <h2>Sold-price benchmark &amp; forecast</h2>
   <div class="card">
     <p class="ct">City of Edinburgh average sold price — UK HPI, with 12-month projection</p>
-    <p class="cs" id="fc-cs">Seasonal ARIMA on the UK House Price Index (incorporates Registers of Scotland). Shaded band = 95% interval.</p>
+    <p class="cs" id="fc-cs">Seasonal ARIMA on the UK House Price Index (incorporates Registers of Scotland). HM Land
+      Registry publishes this index roughly 2 months in arrears, so the solid line only runs as far as real data has
+      been released — the dashed line and shaded 95% interval are the forecast filling the gap to today.</p>
     <div class="chartbox h-hero"><canvas id="c-forecast"></canvas></div>
     <p class="note" id="fc-note"></p>
   </div>
@@ -523,6 +540,13 @@ _TEMPLATE = r"""
       list — sort by newest to see what's changed, and new matches are flagged.</p>
     <div class="loft-actions">
       <span class="loft-count"><b id="loft-n">0</b> matches<span id="loft-delta"></span></span>
+      <span class="price-filter">
+        <span class="pf-label">Price</span>
+        £<input type="number" id="loft-min" inputmode="numeric" placeholder="min" min="0" step="25000">
+        <span class="pf-dash">–</span>
+        £<input type="number" id="loft-max" inputmode="numeric" placeholder="max" min="0" step="25000">
+        <a href="#" id="loft-clear" class="pf-clear" hidden>clear</a>
+      </span>
       <span class="seg" id="loft-sort" role="group" aria-label="Sort">
         <button class="seg-btn active" data-sort="score" type="button">Best match</button>
         <button class="seg-btn" data-sort="new" type="button">Newest listed</button>
@@ -670,10 +694,14 @@ function renderForecast(p){
       backgroundColor:p.accentSoft, fill:"+1" },
     { label:"hi95", data:hi, borderColor:"transparent", pointRadius:0, fill:false },
   ]}, options:o }));
+  const lastActual = new Date(fc.last_actual_month);
+  const now = new Date();
+  const behind = (now.getFullYear()-lastActual.getFullYear())*12 + (now.getMonth()-lastActual.getMonth());
+  const behindTxt = behind > 0 ? ` (published ~${behind} month${behind===1?"":"s"} in arrears)` : "";
   $("#fc-note").textContent =
-    `${fc.last_actual_month}: ${gbp0(fc.last_actual_price)}  →  ${fc.projected_month}: ` +
-    `${gbp0(fc.projected_price)} (${pct1(fc.projected_change_pct)}). 95% range ` +
-    `${gbp0(fc.lo95)} – ${gbp0(fc.hi95)}.`;
+    `Latest published figure, ${fc.last_actual_month}${behindTxt}: ${gbp0(fc.last_actual_price)}  →  ` +
+    `forecast for ${fc.projected_month}: ${gbp0(fc.projected_price)} (${pct1(fc.projected_change_pct)}). ` +
+    `95% range ${gbp0(fc.lo95)} – ${gbp0(fc.hi95)}.`;
 }
 
 function renderAsking(p){
@@ -720,6 +748,12 @@ function hbar(elId, rows, p, color){
   if(!rows || rows.length===0){ box(el,"No data in the latest snapshot."); return; }
   const o = baseOpts(p);
   o.indexAxis = "y";
+  // Horizontal bars: Chart.js's "index" interaction mode matches along the X
+  // axis by default, which is the VALUE axis here, not the category one - so
+  // without axis:"y" hovering anywhere near the right height on any row can
+  // highlight the wrong bar. axis:"y" + intersect:true ties hover to the row
+  // actually under the pointer.
+  o.interaction = { mode:"nearest", intersect:true, axis:"y" };
   o.plugins.tooltip.callbacks = { title: it=>rows[it[0].dataIndex].seg,
     label: it => `${gbp0(it.raw)}  ·  ${rows[it.dataIndex].n} listings` };
   o.scales.x.ticks.callback = v => gbpK(v);
@@ -766,10 +800,18 @@ function renderDist(p){
   const el = $("#c-dist"); const d = DATA.price_distribution;
   if(!el || el.tagName!=="CANVAS"){ return; }
   if(!d || !d.counts.length){ box(el,"No data."); return; }
-  const labels = d.edges.slice(0,-1).map(e => "£"+Math.round(e/1e3)+"k");
+  const lastBin = d.counts.length - 1;
+  // Bin i covers [edges[i], edges[i+1]) except the last, which is open-ended -
+  // everything at or above the 98th-percentile cap gets folded into it.
+  const labels = d.edges.slice(0, -1).map((e, i) => gbpK(e) + (i === lastBin ? "+" : ""));
   const o = baseOpts(p);
-  o.plugins.tooltip.callbacks = { title: it=>it[0].label+" – "+labels[it[0].dataIndex+1] || "",
-    label: it => it.raw + " listings" };
+  o.plugins.tooltip.callbacks = {
+    title: it => {
+      const i = it[0].dataIndex;
+      return i === lastBin ? `${gbpK(d.edges[i])}+` : `${gbpK(d.edges[i])} – ${gbpK(d.edges[i+1])}`;
+    },
+    label: it => it.raw + " listings",
+  };
   o.scales.x.ticks.autoSkip = true; o.scales.x.ticks.maxTicksLimit = 8;
   CHARTS.push(new Chart(el, { type:"bar", data:{ labels, datasets:[
     { data:d.counts, backgroundColor:p.accent, borderRadius:2, barPercentage:1, categoryPercentage:.92 }
@@ -783,6 +825,7 @@ function renderQual(p){
   const total = q.reduce((a,b)=>a+b.n,0);
   const o = baseOpts(p);
   o.indexAxis = "y";
+  o.interaction = { mode:"nearest", intersect:true, axis:"y" };
   o.plugins.tooltip.callbacks = { title: it=>q[it[0].dataIndex].seg,
     label: it => `${it.raw} listings  ·  ${(100*it.raw/total).toFixed(0)}%` };
   o.scales.y.ticks.font = { family:"IBM Plex Mono", size:11 };
@@ -829,6 +872,7 @@ function renderAreaRank(p){
   const priceColor = priceColorScale(rows);
   const o = baseOpts(p);
   o.indexAxis = "y";
+  o.interaction = { mode:"nearest", intersect:true, axis:"y" };
   o.layout.padding.right = 34;
   o.plugins.tooltip.callbacks = {
     title: it => `${rows[it[0].dataIndex].seg} · ${rows[it[0].dataIndex].name}`,
@@ -944,6 +988,7 @@ function esc(s){
 }
 
 let LOFT_SORT = "score"; // "score" (payload's default order) or "new" (most recently listed first)
+let LOFT_MIN_PRICE = null, LOFT_MAX_PRICE = null;
 
 function sortedLoftRows(){
   const rows = (DATA.loft_candidates || []).slice();
@@ -957,6 +1002,13 @@ function sortedLoftRows(){
   return rows;
 }
 
+function filteredLoftRows(){
+  let rows = sortedLoftRows();
+  if(LOFT_MIN_PRICE != null) rows = rows.filter(r => r.price >= LOFT_MIN_PRICE);
+  if(LOFT_MAX_PRICE != null) rows = rows.filter(r => r.price <= LOFT_MAX_PRICE);
+  return rows;
+}
+
 function renderLoftGrid(){
   const host = $("#loft-grid"); if(!host) return;
   const all = DATA.loft_candidates || [];
@@ -964,30 +1016,27 @@ function renderLoftGrid(){
   const seg = $("#loft-sort");
   const nEl = $("#loft-n");
   const deltaEl = $("#loft-delta");
-  if(nEl) nEl.textContent = all.length;
-  if(deltaEl){
-    const nNew = DATA.loft_new_count || 0, nGone = DATA.loft_dropped_count || 0;
-    const parts = [];
-    if(nNew) parts.push(`<span class="delta-new">+${nNew} new</span>`);
-    if(nGone) parts.push(`<span class="delta-gone">${nGone} no longer matching</span>`);
-    deltaEl.innerHTML = parts.length ? ` · since yesterday: ${parts.join(", ")}` : "";
-  }
+  const minInput = $("#loft-min"), maxInput = $("#loft-max"), clearLink = $("#loft-clear");
 
   if(!DATA.loft_text_available){
+    if(nEl) nEl.textContent = 0;
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
       "Today's snapshot predates the free-text scan being added — tomorrow's run will pick up descriptions " +
       "and key features, and this list will fill in.</div>";
     $("#loft-cs").style.display = "none";
     if(btn) btn.style.display = "none";
     if(seg) seg.style.display = "none";
+    document.querySelectorAll(".price-filter").forEach(el => el.style.display = "none");
     return;
   }
   if(all.length === 0){
+    if(nEl) nEl.textContent = 0;
     host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
       "No strong industrial-loft matches in today's snapshot. That's normal — this stock turns over slowly. " +
       "Check back after the next daily run.</div>";
     if(btn) btn.style.display = "none";
     if(seg) seg.style.display = "none";
+    document.querySelectorAll(".price-filter").forEach(el => el.style.display = "none");
     return;
   }
 
@@ -998,8 +1047,46 @@ function renderLoftGrid(){
       b.onclick = () => { LOFT_SORT = b.dataset.sort; renderLoftGrid(); };
     });
   }
+  if(minInput){
+    minInput.value = LOFT_MIN_PRICE ?? "";
+    minInput.onchange = () => { LOFT_MIN_PRICE = minInput.value ? Number(minInput.value) : null; renderLoftGrid(); };
+  }
+  if(maxInput){
+    maxInput.value = LOFT_MAX_PRICE ?? "";
+    maxInput.onchange = () => { LOFT_MAX_PRICE = maxInput.value ? Number(maxInput.value) : null; renderLoftGrid(); };
+  }
+  if(clearLink){
+    clearLink.hidden = LOFT_MIN_PRICE == null && LOFT_MAX_PRICE == null;
+    clearLink.onclick = (e) => {
+      e.preventDefault();
+      LOFT_MIN_PRICE = null; LOFT_MAX_PRICE = null;
+      renderLoftGrid();
+    };
+  }
 
-  const rows = sortedLoftRows();
+  const rows = filteredLoftRows();
+  if(nEl){
+    nEl.textContent = rows.length === all.length ? all.length : `${rows.length} of ${all.length}`;
+  }
+  if(deltaEl){
+    const nNew = DATA.loft_new_count || 0, nGone = DATA.loft_dropped_count || 0;
+    const parts = [];
+    if(nNew) parts.push(`<span class="delta-new">+${nNew} new</span>`);
+    if(nGone) parts.push(`<span class="delta-gone">${nGone} no longer matching</span>`);
+    deltaEl.innerHTML = parts.length ? ` · since yesterday: ${parts.join(", ")}` : "";
+  }
+
+  if(rows.length === 0){
+    host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
+      "No matches in that price range. <a href=\"#\" id=\"loft-clear-inline\">Clear the filter</a> to see all " +
+      all.length + ".</div>";
+    const inline = $("#loft-clear-inline");
+    if(inline) inline.onclick = (e) => { e.preventDefault(); LOFT_MIN_PRICE=null; LOFT_MAX_PRICE=null; renderLoftGrid(); };
+    if(btn) btn.style.display = "none";
+    return;
+  }
+  if(btn) btn.style.display = "";
+
   host.innerHTML = rows.map(r => {
     const tier = r.score >= 6 ? "strong" : "maybe";
     const beds = r.bedrooms == null ? "" : `${r.bedrooms} bed`;
@@ -1027,8 +1114,10 @@ function renderLoftGrid(){
 
   if(btn){
     btn.style.display = "";
+    btn.textContent = rows.length === all.length
+      ? "Open all in new tabs ↗" : `Open these ${rows.length} in new tabs ↗`;
     btn.onclick = () => {
-      const urls = all.map(r => r.property_url).filter(Boolean);
+      const urls = rows.map(r => r.property_url).filter(Boolean);
       urls.forEach(u => window.open(u, "_blank", "noopener"));
     };
   }

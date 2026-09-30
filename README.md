@@ -128,6 +128,8 @@ top match forever:
   is flagged, and the header shows a running "+N new · M no longer matching"
   since the previous run. This is tracked in `data/processed/loft_history.csv`
   (one row per day per match), separate from the day's full snapshot.
+- **Price filter** — min/max fields narrow the list to a budget; the count and
+  the "open all in new tabs" button both update to match.
 
 `summary`/`key_features` are only captured in snapshots from the date this was
 added. Edinburgh's own industrial-conversion stock clusters
