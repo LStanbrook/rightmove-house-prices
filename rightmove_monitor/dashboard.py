@@ -15,6 +15,7 @@ import pandas as pd
 
 from .areas import area_short
 from .config import Config
+from .floorplan_ocr import enrich_floor_sizes
 from .loft_finder import new_since_previous_snapshot, score_listings, update_loft_history
 
 CORE_OUTCODES = [f"EH{i}" for i in range(1, 18)]
@@ -134,9 +135,7 @@ def build_payload(cfg: Config) -> dict:
         payload["price_distribution"] = _histogram(price)
 
         scored = score_listings(raw)
-        candidates = scored[scored["loft_score"] >= LOFT_MIN_SCORE].sort_values(
-            ["loft_score", "price"], ascending=[False, True]
-        )
+        candidates = scored[scored["loft_score"] >= LOFT_MIN_SCORE].copy()
 
         new_ids: set[str] = set()
         n_dropped = 0
@@ -144,10 +143,29 @@ def build_payload(cfg: Config) -> dict:
             hist = update_loft_history(cfg, candidates, snap_day)
             new_ids, n_dropped = new_since_previous_snapshot(hist, snap_day)
 
+            # Floor size - bigger is better - folds into the ranking, not just the
+            # keyword match: OCR the floorplan (cached per listing id; see
+            # floorplan_ocr.py) wherever Rightmove has no size on file, then give
+            # a bounded +0..3 bonus by percentile rank within today's candidates
+            # (only once there's enough of them with a known size to rank against;
+            # a single data point has nothing to be a percentile OF).
+            candidates = enrich_floor_sizes(cfg, candidates)
+            candidates["effective_size"] = candidates["size_sqft"].where(
+                candidates["size_sqft"].notna(), candidates["floor_sqft"]
+            )
+            candidates["size_bonus"] = 0
+            sized = candidates["effective_size"].dropna()
+            if len(sized) >= 3:
+                candidates.loc[sized.index, "size_bonus"] = (sized.rank(pct=True) * 3).round().astype(int)
+            candidates["total_score"] = candidates["loft_score"] + candidates["size_bonus"]
+            candidates = candidates.sort_values(["total_score", "price"], ascending=[False, True])
+
         payload["loft_candidates"] = [
             {
                 "id": r["id"],
-                "score": int(r["loft_score"]),
+                "score": int(r["total_score"]),
+                "base_score": int(r["loft_score"]),
+                "size_bonus": int(r["size_bonus"]),
                 "matches": [m.strip() for m in r["loft_matches"].split(",") if m.strip()],
                 "price": float(r["price"]),
                 "price_qualifier": _s(r.get("price_qualifier")),
@@ -155,7 +173,8 @@ def build_payload(cfg: Config) -> dict:
                 "property_sub_type": _s(r.get("property_sub_type")),
                 "display_address": _s(r.get("display_address")),
                 "outcode": _s(r.get("outcode")),
-                "size_sqft": _to_int_or_none(r.get("size_sqft")),
+                "size_sqft": _to_int_or_none(r.get("effective_size")),
+                "size_is_estimate": bool(pd.isna(r.get("size_sqft")) and pd.notna(r.get("floor_sqft"))),
                 "added_or_reduced": _s(r.get("added_or_reduced")),
                 "first_visible_date": _iso(r.get("first_visible_date")),
                 "branch_name": _s(r.get("branch_name")),
@@ -536,8 +555,11 @@ _TEMPLATE = r"""
     <p class="ct">Today's closest matches</p>
     <p class="cs" id="loft-cs">Every current listing's description and key features, scanned for warehouse/loft/mill-conversion
       language (warehouse, foundry, printworks, bonded warehouse…) and supporting decor cues (exposed brick, mezzanine,
-      double-height, exposed concrete/ductwork, open plan…). Re-scanned fresh every day, so this isn't the same fixed
-      list — sort by newest to see what's changed, and new matches are flagged.</p>
+      double-height, exposed concrete/ductwork, open plan…). Where Rightmove has no floor size on file, the floorplan
+      image itself is OCR'd for one — shown with a "~" and "(est.)"; a real Rightmove figure never gets this. Score
+      = the text match, plus a size bonus once there are enough sized candidates to rank against (bigger scores higher).
+      Re-scanned fresh every day, so this isn't the same fixed list — sort by newest to see what's changed, and new
+      matches are flagged.</p>
     <div class="loft-actions">
       <span class="loft-count"><b id="loft-n">0</b> matches<span id="loft-delta"></span></span>
       <span class="price-filter">
@@ -1090,14 +1112,19 @@ function renderLoftGrid(){
   host.innerHTML = rows.map(r => {
     const tier = r.score >= 6 ? "strong" : "maybe";
     const beds = r.bedrooms == null ? "" : `${r.bedrooms} bed`;
-    const size = r.size_sqft ? `${r.size_sqft.toLocaleString("en-GB")} sq ft` : "";
+    const size = r.size_sqft
+      ? `${r.size_is_estimate ? "~" : ""}${r.size_sqft.toLocaleString("en-GB")} sq ft${r.size_is_estimate ? " (est.)" : ""}`
+      : "";
     const meta = [beds, r.property_sub_type, size].filter(Boolean).join(" · ");
     const chips = r.matches.map(m => `<span class="loft-chip">${esc(m)}</span>`).join("");
     const added = r.added_or_reduced ? esc(r.added_or_reduced) : "";
     const newTag = r.is_new ? '<span class="loft-new-tag">NEW</span>' : "";
+    const scoreTitle = r.size_bonus > 0
+      ? `${r.base_score} for the text match, +${r.size_bonus} for size`
+      : `${r.base_score} for the text match`;
     return `<div class="loft-row${r.is_new ? " is-new" : ""}">
       ${newTag}
-      <span class="loft-score ${tier}">${r.score}</span>
+      <span class="loft-score ${tier}" title="${scoreTitle}">${r.score}</span>
       <span class="loft-price">${gbp0(r.price)}</span>
       <span class="loft-qual">${esc(r.price_qualifier || "")}</span>
       <div class="loft-main">

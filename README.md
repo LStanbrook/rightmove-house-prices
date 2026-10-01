@@ -131,6 +131,35 @@ top match forever:
 - **Price filter** — min/max fields narrow the list to a budget; the count and
   the "open all in new tabs" button both update to match.
 
+### Floor size, read off the floorplan — bigger ranks higher
+
+Rightmove often has no size figure on file at all ("ask agent"), but the
+floorplan image almost always has the Gross Internal Area printed on it.
+[`rightmove_monitor/floorplan_ocr.py`](rightmove_monitor/floorplan_ocr.py) OCRs
+it (Tesseract) for every loft/warehouse match missing a size, and gives a
+bounded +0–3 bonus on top of the text-match score by percentile rank among that
+day's *sized* candidates — so among similarly-strong matches, the bigger one
+ranks first, without letting size alone win over a weak text match. An
+OCR-read figure is always shown with a "~" and "(est.)"; a confirmed Rightmove
+figure never is. Results are cached per listing id in
+`data/processed/floorplan_cache.csv` — a floorplan's reading never changes, so
+OCR only ever runs once per listing, not once per day.
+
+This is a Python port (regexes and all) of the extraction logic from a
+companion project, a Chrome extension
+([`../rightmove scraper`](../rightmove%20scraper)) that scrapes a full
+Rightmove search into Excel with its own floorplan-OCR and weighted-ranking
+features — developed and tuned there against many real floorplans (OCR's
+"S"/"5" and "²"/"?" confusions, telling an internal area from an external or
+separate-structure one, recovering a decimal point Tesseract dropped, falling
+back to summing room dimensions) before being carried over here rather than
+re-derived. Needs the `tesseract-ocr` binary on the machine running it (`apt
+install tesseract-ocr` on the GitHub Actions runner, already wired into
+[`daily.yml`](.github/workflows/daily.yml); on Windows, install via
+`winget install UB-Mannheim.TesseractOCR` — `floorplan_ocr.py` finds it at its
+default install path automatically). Without Tesseract installed, this step is
+skipped silently and ranking falls back to the text score alone.
+
 `summary`/`key_features` are only captured in snapshots from the date this was
 added. Edinburgh's own industrial-conversion stock clusters
 mostly in **Leith** (EH6 — converted whisky bonds/warehouses around the Shore),
