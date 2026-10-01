@@ -16,7 +16,14 @@ import pandas as pd
 from .areas import area_short
 from .config import Config
 from .floorplan_ocr import enrich_floor_sizes
-from .loft_finder import new_since_previous_snapshot, score_listings, update_loft_history
+from .loft_finder import (
+    distance_bonus,
+    geocode_postcode,
+    haversine_km,
+    new_since_previous_snapshot,
+    score_listings,
+    update_loft_history,
+)
 
 CORE_OUTCODES = [f"EH{i}" for i in range(1, 18)]
 BED_ORDER = ["Studio", "1", "2", "3", "4", "5", "6+"]
@@ -139,6 +146,7 @@ def build_payload(cfg: Config) -> dict:
 
         new_ids: set[str] = set()
         n_dropped = 0
+        payload["loft_reference_postcode"] = None
         if not candidates.empty:
             hist = update_loft_history(cfg, candidates, snap_day)
             new_ids, n_dropped = new_since_previous_snapshot(hist, snap_day)
@@ -157,8 +165,31 @@ def build_payload(cfg: Config) -> dict:
             sized = candidates["effective_size"].dropna()
             if len(sized) >= 3:
                 candidates.loc[sized.index, "size_bonus"] = (sized.rank(pct=True) * 3).round().astype(int)
-            candidates["total_score"] = candidates["loft_score"] + candidates["size_bonus"]
+
+            # Distance from a reference point - closer is better - is a second,
+            # independent bonus on the same +0..3 scale. Unlike size, this is a
+            # fixed decay off the actual km (0.5km away is close no matter what
+            # else is in the batch), not a rank within today's candidates.
+            candidates["distance_km"] = None
+            candidates["distance_bonus"] = 0
+            ref_point = geocode_postcode(cfg.loft_finder.reference_postcode)
+            if ref_point is not None:
+                ref_lat, ref_lon = ref_point
+                has_latlon = candidates["latitude"].notna() & candidates["longitude"].notna()
+                candidates.loc[has_latlon, "distance_km"] = candidates.loc[has_latlon].apply(
+                    lambda r: haversine_km(r["latitude"], r["longitude"], ref_lat, ref_lon), axis=1
+                )
+                candidates.loc[has_latlon, "distance_bonus"] = (
+                    candidates.loc[has_latlon, "distance_km"].map(distance_bonus)
+                )
+
+            candidates["total_score"] = (
+                candidates["loft_score"] + candidates["size_bonus"] + candidates["distance_bonus"]
+            )
             candidates = candidates.sort_values(["total_score", "price"], ascending=[False, True])
+            payload["loft_reference_postcode"] = (
+                cfg.loft_finder.reference_postcode if ref_point is not None else None
+            )
 
         payload["loft_candidates"] = [
             {
@@ -166,6 +197,8 @@ def build_payload(cfg: Config) -> dict:
                 "score": int(r["total_score"]),
                 "base_score": int(r["loft_score"]),
                 "size_bonus": int(r["size_bonus"]),
+                "distance_km": round(r["distance_km"], 2) if pd.notna(r.get("distance_km")) else None,
+                "distance_bonus": int(r["distance_bonus"]),
                 "matches": [m.strip() for m in r["loft_matches"].split(",") if m.strip()],
                 "price": float(r["price"]),
                 "price_qualifier": _s(r.get("price_qualifier")),
@@ -557,7 +590,8 @@ _TEMPLATE = r"""
       language (warehouse, foundry, printworks, bonded warehouse…) and supporting decor cues (exposed brick, mezzanine,
       double-height, exposed concrete/ductwork, open plan…). Where Rightmove has no floor size on file, the floorplan
       image itself is OCR'd for one — shown with a "~" and "(est.)"; a real Rightmove figure never gets this. Score
-      = the text match, plus a size bonus once there are enough sized candidates to rank against (bigger scores higher).
+      = the text match, plus up to +3 for size (bigger scores higher, ranked against today's other sized candidates)
+      and up to +3 for distance from <span id="loft-ref-pc"></span> (closer scores higher — halves every 1.5km).
       Re-scanned fresh every day, so this isn't the same fixed list — sort by newest to see what's changed, and new
       matches are flagged.</p>
     <div class="loft-actions">
@@ -1039,6 +1073,8 @@ function renderLoftGrid(){
   const nEl = $("#loft-n");
   const deltaEl = $("#loft-delta");
   const minInput = $("#loft-min"), maxInput = $("#loft-max"), clearLink = $("#loft-clear");
+  const refEl = $("#loft-ref-pc");
+  if(refEl) refEl.textContent = DATA.loft_reference_postcode || "—";
 
   if(!DATA.loft_text_available){
     if(nEl) nEl.textContent = 0;
@@ -1115,12 +1151,16 @@ function renderLoftGrid(){
     const size = r.size_sqft
       ? `${r.size_is_estimate ? "~" : ""}${r.size_sqft.toLocaleString("en-GB")} sq ft${r.size_is_estimate ? " (est.)" : ""}`
       : "";
-    const meta = [beds, r.property_sub_type, size].filter(Boolean).join(" · ");
+    const dist = r.distance_km != null ? `${r.distance_km.toFixed(1)} km away` : "";
+    const meta = [beds, r.property_sub_type, size, dist].filter(Boolean).join(" · ");
     const chips = r.matches.map(m => `<span class="loft-chip">${esc(m)}</span>`).join("");
     const added = r.added_or_reduced ? esc(r.added_or_reduced) : "";
     const newTag = r.is_new ? '<span class="loft-new-tag">NEW</span>' : "";
-    const scoreTitle = r.size_bonus > 0
-      ? `${r.base_score} for the text match, +${r.size_bonus} for size`
+    const bonusBits = [];
+    if(r.size_bonus > 0) bonusBits.push(`+${r.size_bonus} for size`);
+    if(r.distance_bonus > 0) bonusBits.push(`+${r.distance_bonus} for distance`);
+    const scoreTitle = bonusBits.length
+      ? `${r.base_score} for the text match, ${bonusBits.join(", ")}`
       : `${r.base_score} for the text match`;
     return `<div class="loft-row${r.is_new ? " is-new" : ""}">
       ${newTag}

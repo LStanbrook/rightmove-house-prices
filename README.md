@@ -160,6 +160,17 @@ install tesseract-ocr` on the GitHub Actions runner, already wired into
 default install path automatically). Without Tesseract installed, this step is
 skipped silently and ranking falls back to the text score alone.
 
+### Distance from a reference point — closer ranks higher
+
+Alongside size, each match gets a second, independent +0–3 bonus for how close
+it is to `loft_finder.reference_postcode` in [`config.yaml`](config.yaml)
+(default `EH3 8BW`) — geocoded via [postcodes.io](https://postcodes.io) (free,
+no key) at build time. Unlike the size bonus, this is a **fixed decay off the
+real distance**, not a rank against today's other candidates: the score halves
+every 1.5km (0km → 100%, 1.5km → 50%, 3km → 25%), because 0.5km away is
+genuinely close regardless of what else happens to be in that day's shortlist.
+Set `reference_postcode: ""` to drop distance from the ranking entirely.
+
 `summary`/`key_features` are only captured in snapshots from the date this was
 added. Edinburgh's own industrial-conversion stock clusters
 mostly in **Leith** (EH6 — converted whisky bonds/warehouses around the Shore),

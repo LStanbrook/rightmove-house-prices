@@ -33,9 +33,15 @@ class UKHPIConfig:
 
 
 @dataclass
+class LoftFinderConfig:
+    reference_postcode: str = "EH3 8BW"
+
+
+@dataclass
 class Config:
     rightmove: RightmoveConfig = field(default_factory=RightmoveConfig)
     ukhpi: UKHPIConfig = field(default_factory=UKHPIConfig)
+    loft_finder: LoftFinderConfig = field(default_factory=LoftFinderConfig)
     data_dir: Path = PROJECT_ROOT / "data"
     root: Path = PROJECT_ROOT
 
@@ -66,6 +72,7 @@ def load_config(path: str | Path | None = None) -> Config:
 
     rm = raw.get("rightmove", {}) or {}
     hpi = raw.get("ukhpi", {}) or {}
+    loft = raw.get("loft_finder", {}) or {}
     paths = raw.get("paths", {}) or {}
 
     data_dir = Path(paths.get("data_dir", "data"))
@@ -85,6 +92,9 @@ def load_config(path: str | Path | None = None) -> Config:
         ukhpi=UKHPIConfig(
             region_slug=hpi.get("region_slug", "city-of-edinburgh"),
             start_month=str(hpi.get("start_month", "2004-01")),
+        ),
+        loft_finder=LoftFinderConfig(
+            reference_postcode=str(loft.get("reference_postcode", "EH3 8BW") or ""),
         ),
         data_dir=data_dir,
         root=PROJECT_ROOT,

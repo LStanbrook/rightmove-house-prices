@@ -13,9 +13,11 @@ older snapshots won't have them and are skipped.
 """
 from __future__ import annotations
 
+import math
 import re
 
 import pandas as pd
+import requests
 
 from .config import Config
 
@@ -184,3 +186,44 @@ def new_since_previous_snapshot(history: pd.DataFrame, snapshot_date: str) -> tu
     today_ids = set(history.loc[history["snapshot_date"] == snapshot_date, "id"].astype(str))
     prev_ids = set(history.loc[history["snapshot_date"] == prev_date, "id"].astype(str))
     return today_ids - prev_ids, len(prev_ids - today_ids)
+
+
+# --------------------------------------------------------------------------- #
+# Distance from a reference point - closer scores higher. A fixed decay from
+# the actual distance, not a percentile rank like the size bonus: 0.5km away
+# is genuinely close regardless of what else is in today's candidate batch,
+# unlike size where "big" only means something relative to the others. Same
+# curve as the companion Chrome extension's own distance scoring.
+# --------------------------------------------------------------------------- #
+EARTH_RADIUS_KM = 6371.0
+DISTANCE_HALF_LIFE_KM = 1.5  # score halves every 1.5km: 0km=100%, 1.5km=50%, 3km=25%
+MAX_DISTANCE_BONUS = 3
+
+
+def geocode_postcode(postcode: str) -> tuple[float, float] | None:
+    """Free, keyless UK postcode -> (lat, lon) via postcodes.io."""
+    if not postcode or not postcode.strip():
+        return None
+    try:
+        clean = postcode.strip().replace(" ", "")
+        resp = requests.get(f"https://api.postcodes.io/postcodes/{clean}", timeout=10)
+        if resp.status_code != 200:
+            return None
+        result = (resp.json() or {}).get("result") or {}
+        lat, lon = result.get("latitude"), result.get("longitude")
+        return (float(lat), float(lon)) if lat is not None and lon is not None else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlambda / 2) ** 2
+    return 2 * EARTH_RADIUS_KM * math.asin(math.sqrt(a))
+
+
+def distance_bonus(distance_km: float) -> int:
+    decay = 0.5 ** (distance_km / DISTANCE_HALF_LIFE_KM)
+    return round(MAX_DISTANCE_BONUS * decay)

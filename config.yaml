@@ -26,5 +26,11 @@ ukhpi:
   region_slug: "city-of-edinburgh"
   start_month: "2004-01"       # earliest month with Scottish data
 
+loft_finder:
+  # Distance-from point for the loft/warehouse match ranking - closer scores
+  # higher. Geocoded via postcodes.io (free, no key) at build time; set to ""
+  # to drop distance from the ranking entirely.
+  reference_postcode: "EH3 8BW"
+
 paths:
   data_dir: "data"
