@@ -1,0 +1,10 @@
+{
+  "captured_at": "2026-10-22T12:09:46.285429+00:00",
+  "snapshot_date": "2026-10-22",
+  "location_identifier": "REGION^475",
+  "location_name": "Edinburgh",
+  "reported_total": 1973,
+  "collected": 1973,
+  "warnings": [],
+  "file": "/home/runner/work/rightmove-house-prices/rightmove-house-prices/data/raw/rightmove/edinburgh_2026-10-22.parquet"
+}
