@@ -29,6 +29,7 @@ CORE_OUTCODES = [f"EH{i}" for i in range(1, 18)]
 BED_ORDER = ["Studio", "1", "2", "3", "4", "5", "6+"]
 AREA_MIN_LISTINGS = 8  # ignore very thin districts in the area views
 LOFT_MIN_SCORE = 3  # at least one strong hit, or two supporting ones
+MAX_SIZE_BONUS = 4  # bigger floor area is weighted slightly above distance (+0..3)
 
 
 # --------------------------------------------------------------------------- #
@@ -154,7 +155,7 @@ def build_payload(cfg: Config) -> dict:
             # Floor size - bigger is better - folds into the ranking, not just the
             # keyword match: OCR the floorplan (cached per listing id; see
             # floorplan_ocr.py) wherever Rightmove has no size on file, then give
-            # a bounded +0..3 bonus by percentile rank within today's candidates
+            # a bounded +0..MAX_SIZE_BONUS bonus by percentile rank within today's candidates
             # (only once there's enough of them with a known size to rank against;
             # a single data point has nothing to be a percentile OF).
             candidates = enrich_floor_sizes(cfg, candidates)
@@ -164,10 +165,11 @@ def build_payload(cfg: Config) -> dict:
             candidates["size_bonus"] = 0
             sized = candidates["effective_size"].dropna()
             if len(sized) >= 3:
-                candidates.loc[sized.index, "size_bonus"] = (sized.rank(pct=True) * 3).round().astype(int)
+                candidates.loc[sized.index, "size_bonus"] = (sized.rank(pct=True) * MAX_SIZE_BONUS).round().astype(int)
 
             # Distance from a reference point - closer is better - is a second,
-            # independent bonus on the same +0..3 scale. Unlike size, this is a
+            # independent bonus on a +0..3 scale (size is weighted one notch
+            # higher - floor area matters more than postcode). Unlike size, this is a
             # fixed decay off the actual km (0.5km away is close no matter what
             # else is in the batch), not a rank within today's candidates.
             candidates["distance_km"] = None
@@ -209,6 +211,7 @@ def build_payload(cfg: Config) -> dict:
                 "size_sqft": _to_int_or_none(r.get("effective_size")),
                 "size_is_estimate": bool(pd.isna(r.get("size_sqft")) and pd.notna(r.get("floor_sqft"))),
                 "added_or_reduced": _s(r.get("added_or_reduced")),
+                "added_or_reduced_date": _s(r.get("added_or_reduced_date")),
                 "first_visible_date": _iso(r.get("first_visible_date")),
                 "branch_name": _s(r.get("branch_name")),
                 "property_url": _s(r.get("property_url")),
@@ -564,25 +567,6 @@ _TEMPLATE = r"""
     <p class="note" id="fc-note"></p>
   </div>
 
-  <h2>Cheaper vs dearer — Edinburgh by area</h2>
-  <div class="card">
-    <p class="ct">Median asking price by area</p>
-    <p class="cs">Postcode districts, cheapest to dearest. Dashed line = city median. Numbers after each bar are listing counts.</p>
-    <div class="chartbox h-tall"><canvas id="c-area-rank"></canvas></div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <p class="ct">How every area is trending</p>
-    <p class="cs" id="area-trend-cs">Median asking price per snapshot, every district on one chart. Lines are
-      shaded by price level (light = cheap, dark = dear) and labelled at the right-hand end — hover a line for its
-      exact values.</p>
-    <div class="chartbox h-tall" style="height:420px"><canvas id="c-area-trend"></canvas></div>
-  </div>
-  <div class="card" style="margin-top:16px">
-    <p class="ct">Area league table</p>
-    <p class="cs" id="area-table-cs">Every district with 3+ listings today, cheapest first. &ldquo;vs city&rdquo; compares the area median to the whole-city median.</p>
-    <div class="scroller"><table class="lt" id="area-table"></table></div>
-  </div>
-
   <h2>Open-plan industrial lofts &amp; warehouse conversions</h2>
   <div class="card">
     <p class="ct">Today's closest matches</p>
@@ -590,9 +574,9 @@ _TEMPLATE = r"""
       language (warehouse, foundry, printworks, bonded warehouse…) and supporting decor cues (exposed brick, mezzanine,
       double-height, exposed concrete/ductwork, open plan…). Where Rightmove has no floor size on file, the floorplan
       image itself is OCR'd for one — shown with a "~" and "(est.)"; a real Rightmove figure never gets this. Score
-      = the text match, plus up to +3 for size (bigger scores higher, ranked against today's other sized candidates)
+      = the text match, plus up to +4 for size (bigger scores higher, ranked against today's other sized candidates)
       and up to +3 for distance from <span id="loft-ref-pc"></span> (closer scores higher — halves every 1.5km).
-      Re-scanned fresh every day, so this isn't the same fixed list — sort by newest to see what's changed, and new
+      Re-scanned fresh every day, so this isn't the same fixed list — &ldquo;Newest listed&rdquo; shows only listings added or reduced in the last 7 days, and new
       matches are flagged.</p>
     <div class="loft-actions">
       <span class="loft-count"><b id="loft-n">0</b> matches<span id="loft-delta"></span></span>
@@ -605,7 +589,7 @@ _TEMPLATE = r"""
       </span>
       <span class="seg" id="loft-sort" role="group" aria-label="Sort">
         <button class="seg-btn active" data-sort="score" type="button">Best match</button>
-        <button class="seg-btn" data-sort="new" type="button">Newest listed</button>
+        <button class="seg-btn" data-sort="new" type="button" title="Only listings added or reduced in the last 7 days">Newest listed</button>
       </span>
       <button class="btn" id="loft-open-all" type="button">Open all in new tabs ↗</button>
     </div>
@@ -618,6 +602,25 @@ _TEMPLATE = r"""
       <b>Powderhall</b> (EH7) — the old foundry/waste-works site, exposed brick and steel; and <b>Fountainbridge</b>
       (EH3/EH11) — former brewery and rubber-works land, mostly new-build in an industrial idiom rather than true
       conversions. This list re-scans automatically every day the monitor runs.</p>
+  </div>
+
+  <h2>Cheaper vs dearer — Edinburgh by area</h2>
+  <div class="card">
+    <p class="ct">How every area is trending</p>
+    <p class="cs" id="area-trend-cs">Median asking price per snapshot, every district on one chart. Lines are
+      shaded by price level (light = cheap, dark = dear) and labelled at the right-hand end — hover a line for its
+      exact values.</p>
+    <div class="chartbox h-tall" style="height:420px"><canvas id="c-area-trend"></canvas></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <p class="ct">Median asking price by area</p>
+    <p class="cs">Postcode districts, cheapest to dearest. Dashed line = city median. Numbers after each bar are listing counts.</p>
+    <div class="chartbox h-tall"><canvas id="c-area-rank"></canvas></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <p class="ct">Area league table</p>
+    <p class="cs" id="area-table-cs">Every district with 3+ listings today, cheapest first. &ldquo;vs city&rdquo; compares the area median to the whole-city median.</p>
+    <div class="scroller"><table class="lt" id="area-table"></table></div>
   </div>
 
   <h2>Rightmove asking prices &amp; stock over time</h2>
@@ -1046,14 +1049,25 @@ function esc(s){
 let LOFT_SORT = "score"; // "score" (payload's default order) or "new" (most recently listed first)
 let LOFT_MIN_PRICE = null, LOFT_MAX_PRICE = null;
 
+const LOFT_NEW_WINDOW_DAYS = 7;
+
+// When was this listing last added or reduced? Prefer Rightmove's parsed
+// "Added on / Reduced on" date; fall back to its listing-update timestamp.
+function loftChangedTime(r){
+  const d = r.added_or_reduced_date || r.first_visible_date;
+  const t = d ? new Date(d).getTime() : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
 function sortedLoftRows(){
-  const rows = (DATA.loft_candidates || []).slice();
+  let rows = (DATA.loft_candidates || []).slice();
   if(LOFT_SORT === "new"){
-    rows.sort((a,b) => {
-      const ta = a.first_visible_date ? new Date(a.first_visible_date).getTime() : 0;
-      const tb = b.first_visible_date ? new Date(b.first_visible_date).getTime() : 0;
-      return tb - ta || b.score - a.score;
-    });
+    // Only listings added or reduced within the last week (relative to the
+    // snapshot day, so a stale dashboard doesn't empty itself), newest first.
+    const snap = DATA.snapshot && DATA.snapshot.date ? new Date(DATA.snapshot.date).getTime() : Date.now();
+    const cutoff = snap - LOFT_NEW_WINDOW_DAYS * 86400000;
+    rows = rows.filter(r => { const t = loftChangedTime(r); return t != null && t >= cutoff; });
+    rows.sort((a,b) => loftChangedTime(b) - loftChangedTime(a) || b.score - a.score);
   }
   return rows;
 }
@@ -1135,11 +1149,20 @@ function renderLoftGrid(){
   }
 
   if(rows.length === 0){
-    host.innerHTML = '<div class="empty" style="padding:26px 20px">' +
-      "No matches in that price range. <a href=\"#\" id=\"loft-clear-inline\">Clear the filter</a> to see all " +
-      all.length + ".</div>";
+    const priceFiltered = LOFT_MIN_PRICE != null || LOFT_MAX_PRICE != null;
+    const why = LOFT_SORT === "new"
+      ? `No matches added or reduced in the last ${LOFT_NEW_WINDOW_DAYS} days${priceFiltered ? " in that price range" : ""}. `
+      : "No matches in that price range. ";
+    const fix = LOFT_SORT === "new"
+      ? '<a href="#" id="loft-clear-inline">Show all by best match</a>'
+      : '<a href="#" id="loft-clear-inline">Clear the filter</a> to see all ' + all.length + ".";
+    host.innerHTML = '<div class="empty" style="padding:26px 20px">' + why + fix + "</div>";
     const inline = $("#loft-clear-inline");
-    if(inline) inline.onclick = (e) => { e.preventDefault(); LOFT_MIN_PRICE=null; LOFT_MAX_PRICE=null; renderLoftGrid(); };
+    if(inline) inline.onclick = (e) => {
+      e.preventDefault();
+      if(LOFT_SORT === "new") LOFT_SORT = "score"; else { LOFT_MIN_PRICE=null; LOFT_MAX_PRICE=null; }
+      renderLoftGrid();
+    };
     if(btn) btn.style.display = "none";
     return;
   }
